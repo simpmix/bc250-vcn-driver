@@ -3,7 +3,7 @@
  * Copyright (c) 2026 BC-250 Project
  * SPDX-License-Identifier: MIT
  *
- * rate_control.h - CBR/VBR rate control header
+ * rate_control.h - CBR/VBR/Low-Latency rate control header
  */
 #ifndef RATE_CONTROL_H
 #define RATE_CONTROL_H
@@ -12,7 +12,8 @@
 
 typedef enum {
     RC_CBR,
-    RC_VBR
+    RC_VBR,
+    RC_LOW_LATENCY  /* Low latency mode for Sunshine / Moonlight streaming */
 } rc_mode_t;
 
 typedef struct {
@@ -21,14 +22,16 @@ typedef struct {
     uint32_t max_bitrate;
     int qp_min;
     int qp_max;
-    
-    // Buffer model variables
+
+    /* Buffer model variables */
     double framerate;
     uint32_t target_bits_per_frame;
     int64_t buffer_fullness;
     int64_t buffer_size;
+    int base_qp;
     int current_qp;
     uint64_t prev_frame_sad;
+    int64_t error_integral;
 } rate_control_t;
 
 void rc_init(rate_control_t *rc, rc_mode_t mode, uint32_t bitrate, double fps);

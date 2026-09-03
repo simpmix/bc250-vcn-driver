@@ -91,8 +91,8 @@ typedef struct bc250_gpu_context {
     VkBuffer entropy_buffer;
     VkDeviceMemory entropy_memory;
 
-    VkBuffer staging_buffer;
-    VkDeviceMemory staging_memory;
+    VkBuffer staging_buffers[2];
+    VkDeviceMemory staging_memories[2];
     VkDeviceSize staging_size;
     
     /* Reconstructed frame for DPB */
@@ -145,6 +145,7 @@ int gpu_compute_dispatch_encode(gpu_context_t *ctx, gpu_image_t render_target, i
 int gpu_compute_end_picture(gpu_context_t *ctx);
 int gpu_compute_sync(gpu_context_t *ctx);
 int gpu_compute_get_staging_data(gpu_context_t *ctx, void **data, size_t *size);
+int gpu_compute_release_staging_data(gpu_context_t *ctx);
 
 #ifdef __cplusplus
 }

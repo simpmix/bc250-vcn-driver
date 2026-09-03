@@ -116,7 +116,8 @@ static int allocate_encoding_buffers(gpu_context_t *ctx, uint32_t width, uint32_
     create_buffer_with_memory(ctx, quant_levels_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &ctx->quant_levels_buffer, &ctx->quant_levels_memory);
     create_buffer_with_memory(ctx, nz_count_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &ctx->nz_count_buffer, &ctx->nz_count_memory);
     create_buffer_with_memory(ctx, entropy_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &ctx->entropy_buffer, &ctx->entropy_memory);
-    create_buffer_with_memory(ctx, entropy_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &ctx->staging_buffer, &ctx->staging_memory);
+    create_buffer_with_memory(ctx, entropy_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &ctx->staging_buffers[0], &ctx->staging_memories[0]);
+    create_buffer_with_memory(ctx, entropy_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &ctx->staging_buffers[1], &ctx->staging_memories[1]);
 
     /* Update buffer descriptors */
     update_storage_buffer_descriptor(ctx->device, ctx->me_desc_set, 2, ctx->mv_buffer, mv_size);
@@ -287,11 +288,24 @@ int bc250_gpu_init(bc250_gpu_context_t *ctx) {
     VkQueueFamilyProperties *qf_props = malloc(qf_count * sizeof(VkQueueFamilyProperties));
     vkGetPhysicalDeviceQueueFamilyProperties(ctx->physical_device, &qf_count, qf_props);
 
+    /* 1. Prioritize dedicated hardware async compute queue (ACE on RDNA2) */
     ctx->compute_queue_family = (uint32_t)-1;
     for (uint32_t i = 0; i < qf_count; i++) {
-        if (qf_props[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
+        if ((qf_props[i].queueFlags & VK_QUEUE_COMPUTE_BIT) &&
+            !(qf_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
             ctx->compute_queue_family = i;
+            fprintf(stderr, "[bc250-gpu] Using dedicated async compute queue family %u\n", i);
             break;
+        }
+    }
+    /* 2. Fallback to any compute-capable queue */
+    if (ctx->compute_queue_family == (uint32_t)-1) {
+        for (uint32_t i = 0; i < qf_count; i++) {
+            if (qf_props[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
+                ctx->compute_queue_family = i;
+                fprintf(stderr, "[bc250-gpu] Using general compute queue family %u\n", i);
+                break;
+            }
         }
     }
     free(qf_props);
@@ -549,7 +563,12 @@ void bc250_gpu_destroy(bc250_gpu_context_t *ctx) {
     if (ctx->quant_levels_buffer) { vkDestroyBuffer(ctx->device, ctx->quant_levels_buffer, NULL); vkFreeMemory(ctx->device, ctx->quant_levels_memory, NULL); }
     if (ctx->nz_count_buffer) { vkDestroyBuffer(ctx->device, ctx->nz_count_buffer, NULL); vkFreeMemory(ctx->device, ctx->nz_count_memory, NULL); }
     if (ctx->entropy_buffer) { vkDestroyBuffer(ctx->device, ctx->entropy_buffer, NULL); vkFreeMemory(ctx->device, ctx->entropy_memory, NULL); }
-    if (ctx->staging_buffer) { vkDestroyBuffer(ctx->device, ctx->staging_buffer, NULL); vkFreeMemory(ctx->device, ctx->staging_memory, NULL); }
+    for (int i = 0; i < 2; i++) {
+        if (ctx->staging_buffers[i]) {
+            vkDestroyBuffer(ctx->device, ctx->staging_buffers[i], NULL);
+            vkFreeMemory(ctx->device, ctx->staging_memories[i], NULL);
+        }
+    }
 
     if (ctx->timeline_sem) vkDestroySemaphore(ctx->device, ctx->timeline_sem, NULL);
     if (ctx->fences[0]) vkDestroyFence(ctx->device, ctx->fences[0], NULL);
@@ -754,11 +773,11 @@ int gpu_compute_dispatch_encode(gpu_context_t *ctx, gpu_image_t render_target, i
         insert_compute_barrier(cmd_buf);
     }
 
-    /* Copy entropy output buffer to staging buffer for CPU readback */
+    /* Copy entropy output buffer to current staging buffer for overlapped CPU readback */
     VkDeviceSize copy_size = width * height;
     if (copy_size > ctx->staging_size) copy_size = ctx->staging_size;
     VkBufferCopy copy_region = { .srcOffset = 0, .dstOffset = 0, .size = copy_size };
-    vkCmdCopyBuffer(cmd_buf, ctx->entropy_buffer, ctx->staging_buffer, 1, &copy_region);
+    vkCmdCopyBuffer(cmd_buf, ctx->entropy_buffer, ctx->staging_buffers[ctx->current_buf], 1, &copy_region);
 
     return 0;
 }
@@ -785,7 +804,15 @@ int gpu_compute_sync(gpu_context_t *ctx) {
 
 int gpu_compute_get_staging_data(gpu_context_t *ctx, void **data, size_t *size) {
     if (!ctx || !data || !size) return -1;
+    int prev_buf = (ctx->current_buf + 1) % 2;
     *size = ctx->staging_size;
-    VK_CHECK(vkMapMemory(ctx->device, ctx->staging_memory, 0, ctx->staging_size, 0, data));
+    VK_CHECK(vkMapMemory(ctx->device, ctx->staging_memories[prev_buf], 0, ctx->staging_size, 0, data));
+    return 0;
+}
+
+int gpu_compute_release_staging_data(gpu_context_t *ctx) {
+    if (!ctx) return -1;
+    int prev_buf = (ctx->current_buf + 1) % 2;
+    vkUnmapMemory(ctx->device, ctx->staging_memories[prev_buf]);
     return 0;
 }

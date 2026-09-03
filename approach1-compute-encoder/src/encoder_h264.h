@@ -50,6 +50,16 @@ int h264_encoder_encode_frame(h264_encoder_t *encoder,
                               uint8_t *output_buf, size_t output_size);
 
 /**
+ * h264_encoder_force_idr - Request next frame to be an instantaneous decoder refresh (IDR)
+ */
+void h264_encoder_force_idr(h264_encoder_t *encoder);
+
+/**
+ * h264_encoder_set_bitrate - Dynamically adjust target bitrate
+ */
+void h264_encoder_set_bitrate(h264_encoder_t *encoder, uint32_t bitrate_bps);
+
+/**
  * h264_encoder_destroy - Teardown and free resources
  */
 void h264_encoder_destroy(h264_encoder_t *encoder);

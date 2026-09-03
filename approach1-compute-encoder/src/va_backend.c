@@ -379,6 +379,20 @@ VAStatus bc250_RenderPicture(VADriverContextP ctx, VAContextID context, VABuffer
                     memcpy(&c->h264_state.pic_param, pic, sizeof(VAEncPictureParameterBufferH264));
                     c->h264_state.has_pic = 1;
                     c->coded_buf_id = pic->coded_buf;
+                    if (pic->pic_fields.bits.idr_pic_flag && c->h264_enc) {
+                        h264_encoder_force_idr(c->h264_enc);
+                    }
+                }
+                break;
+            case VAEncMiscParameterBufferType:
+                if (b->size >= sizeof(VAEncMiscParameterBuffer)) {
+                    VAEncMiscParameterBuffer *misc = (VAEncMiscParameterBuffer*)b->data;
+                    if (misc->type == VAEncMiscParameterTypeRateControl && c->h264_enc) {
+                        VAEncMiscParameterRateControl *rc = (VAEncMiscParameterRateControl*)misc->data;
+                        if (rc->bits_per_second > 0) {
+                            h264_encoder_set_bitrate(c->h264_enc, rc->bits_per_second);
+                        }
+                    }
                 }
                 break;
             case VAEncSliceParameterBufferType:

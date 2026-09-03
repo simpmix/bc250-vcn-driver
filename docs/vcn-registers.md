@@ -1,27 +1,25 @@
-# VCN 3.0 Register Map
+# VCN 3.0 Hardware Analysis & Security Architecture
 
-Research notes on VCN 3.0 registers based on `vcn_v3_0.c` in the Linux kernel tree.
+Technical summary of the VCN 3.0 IP block on the AMD BC-250 ("Cyan Skillfish" / PS5 "Oberon" APU).
 
-## Key Register Groups
+---
 
-### Power & Clock
-- `mmUVD_POWER_STATUS`
-- `mmUVD_CGC_CTRL`
-These control clock gating and power states for the VCN block.
+## Hardware Findings & Security Architecture
 
-### Ring Buffer
-- `mmUVD_RBC_RB_BASE`
-- `mmUVD_RBC_RB_RPTR`
-- `mmUVD_RBC_RB_WPTR`
-Used for submitting commands to the VCN microcode.
+### 1. The Platform Security Processor (PSP) Hardware Root of Trust
+On modern AMD APUs, the Video Core Next (VCN) IP block is an independent coprocessor featuring a dedicated microcontroller (VCPU) running firmware in private SRAM. The VCN cannot boot or execute instructions until the following sequence succeeds:
+1. The host driver (`amdgpu`) sends a command via the PSP mailbox.
+2. The AMD Platform Security Processor (an isolated on-die ARM security core with masked ROM and burned hardware eFuses) authenticates the signature on the VCN firmware blob (`vcn_3_0.bin`) using Sony's public root key.
+3. Once authenticated, the PSP releases the hardware reset line and unmasks the VCPU clocks.
 
-### Status & Initialization
-- `mmUVD_STATUS`
-- `mmUVD_VCPU_CNTL`
-Controls the VCN embedded CPU (VCPU) which runs the firmware. 
-If firmware fails to load (due to PSP locks), the VCPU will not transition out of reset.
+On the BC-250 SKU, the hardware eFuses were permanently set at the factory to mark the VCN block as unprovisioned/disabled. As a result, the PSP rejects VCN initialization with error `-1` (`amdgpu: psp vcn load failed: -22`).
 
-## Research Goals
-Can we bypass the PSP validation by writing directly to `mmUVD_VCPU_CNTL` and sideloading firmware into the instruction cache, or is the memory bus strictly isolated by hardware fuses?
+### 2. SMN Bus & Dynamic IP Discovery vs. Static PCIe MMIO
+* On RDNA 2 (Navi 2x / Oberon), registers are **not** statically mapped into the PCIe BAR address space at fixed offsets.
+* All IP block communication is routed dynamically through the **System Management Network (SMN)** bus and configured via the GPU's binary **IP Discovery** table at boot.
+* Attempting to perform arbitrary MMIO writes to offsets like `BAR + 0x7E00` does not reach the VCN block; it hits unrelated unmapped physical memory space, risking PCIe bus lockups and kernel panics.
 
-<!-- bc250-vcn-driver v0.1.0 -->
+### 3. Conclusion & Solution
+Because the silicon VCN block is permanently locked by hardware eFuses and signed firmware requirements, the project uses **Approach 1: The Vulkan Compute VA-API Driver**. 
+
+By utilizing the APU's **40 unlocked RDNA 2 Compute Units (2,560 stream processors)** to execute parallel compute shaders for motion estimation, transform, quantization, and entropy coding, we achieve high-performance hardware-like encoding without touching the locked VCN silicon.

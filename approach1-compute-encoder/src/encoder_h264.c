@@ -34,12 +34,14 @@ struct h264_encoder {
     uint32_t width_in_mbs, height_in_mbs;
     uint32_t total_mbs;
 
-    /* GOP structure */
+    /* GOP & Stream structure */
+    uint32_t fps;
     uint32_t gop_size;          /* IDR interval */
     uint32_t frame_count;       /* Total frames encoded */
     uint32_t frame_num;         /* H.264 frame_num (resets at IDR) */
     uint32_t idr_pic_id;        /* Increments at each IDR */
     int poc;                    /* Picture order count */
+    bool force_idr;             /* Dynamic keyframe request flag */
 
     /* Parameters */
     h264_sps_t sps;
@@ -73,6 +75,21 @@ static void manage_dpb(h264_encoder_t *encoder, int new_frame_num, int new_poc)
     entry->poc = new_poc;
     entry->is_reference = true;
     entry->is_long_term = false;
+}
+
+/*
+ * write_aud - Writes Access Unit Delimiter (NAL type 9)
+ * Essential for Sunshine / Moonlight / WebRTC to identify frame boundaries.
+ */
+static size_t write_aud(uint8_t *buf, size_t buf_size, bool is_idr) {
+    if (buf_size < 6) return 0;
+    buf[0] = 0x00;
+    buf[1] = 0x00;
+    buf[2] = 0x00;
+    buf[3] = 0x01;
+    buf[4] = 0x09; /* NAL header: forbidden=0, ref_idc=0, type=9 (AUD) */
+    buf[5] = is_idr ? 0x10 : 0x30; /* primary_pic_type: 0 for I, 1 for P (shifted) + stop bit */
+    return 6;
 }
 
 static size_t write_slice_header(h264_encoder_t *encoder, bitstream_t *bs,
@@ -139,17 +156,19 @@ h264_encoder_t *h264_encoder_create(bc250_gpu_context_t *gpu_ctx,
     encoder->height_in_mbs = (height + 15) / 16;
     encoder->total_mbs = encoder->width_in_mbs * encoder->height_in_mbs;
 
-    encoder->gop_size = fps > 0 ? fps : 30;
+    encoder->fps = fps > 0 ? fps : 60;
+    encoder->gop_size = encoder->fps; /* 1-second default keyframe interval */
     encoder->dpb_max = 16;
+    encoder->force_idr = false;
 
     uint8_t prof_idc = PROFILE_MAIN;
-    if (profile == VAProfileH264High) prof_idc = PROFILE_HIGH;
-    else if (profile == VAProfileH264Baseline || profile == VAProfileH264ConstrainedBaseline) prof_idc = PROFILE_BASELINE;
+    if (profile == 0x64 /* VAProfileH264High */) prof_idc = PROFILE_HIGH;
+    else if (profile == 0x42 /* VAProfileH264Baseline */ || profile == 0x4D) prof_idc = PROFILE_BASELINE;
 
-    h264_sps_default(&encoder->sps, width, height, fps, prof_idc);
+    h264_sps_default(&encoder->sps, width, height, encoder->fps, prof_idc);
     h264_pps_default(&encoder->pps, encoder->sps.sps_id, false, 26);
 
-    rc_init(&encoder->rc, RC_CBR, bitrate, (double)fps);
+    rc_init(&encoder->rc, RC_CBR, bitrate, (double)encoder->fps);
 
     encoder->output_buf_size = width * height * 2 + 65536;
     encoder->output_buf = malloc(encoder->output_buf_size);
@@ -159,9 +178,21 @@ h264_encoder_t *h264_encoder_create(bc250_gpu_context_t *gpu_ctx,
     }
 
     fprintf(stderr, "[bc250-h264] Encoder initialized: %ux%u @ %u fps, %u bps, profile %d\n",
-            width, height, fps, bitrate, prof_idc);
+            width, height, encoder->fps, bitrate, prof_idc);
 
     return encoder;
+}
+
+void h264_encoder_force_idr(h264_encoder_t *encoder) {
+    if (encoder) {
+        encoder->force_idr = true;
+    }
+}
+
+void h264_encoder_set_bitrate(h264_encoder_t *encoder, uint32_t bitrate_bps) {
+    if (encoder && bitrate_bps > 0) {
+        rc_init(&encoder->rc, RC_CBR, bitrate_bps, (double)encoder->fps);
+    }
 }
 
 int h264_encoder_encode_frame(h264_encoder_t *encoder,
@@ -171,7 +202,8 @@ int h264_encoder_encode_frame(h264_encoder_t *encoder,
 {
     if (!encoder || !gpu_ctx || !output_buf) return -1;
 
-    bool is_idr = (encoder->frame_count % encoder->gop_size == 0);
+    bool is_idr = (encoder->frame_count % encoder->gop_size == 0) || encoder->force_idr;
+    encoder->force_idr = false;
 
     if (is_idr) {
         encoder->frame_num = 0;
@@ -183,7 +215,12 @@ int h264_encoder_encode_frame(h264_encoder_t *encoder,
     int qp = rc_get_frame_qp(&encoder->rc, 0);
     size_t total_written = 0;
 
-    /* Write SPS and PPS NALUs on IDR frames */
+    /* 1. Write AUD (Access Unit Delimiter) NALU */
+    total_written += write_aud(encoder->output_buf + total_written,
+                               encoder->output_buf_size - total_written,
+                               is_idr);
+
+    /* 2. Write SPS and PPS NALUs on IDR frames */
     if (is_idr) {
         size_t sps_size = bs_write_sps(
             encoder->output_buf + total_written,
@@ -198,7 +235,7 @@ int h264_encoder_encode_frame(h264_encoder_t *encoder,
         total_written += pps_size;
     }
 
-    /* Write slice header */
+    /* 3. Write slice header */
     uint8_t slice_hdr_buf[512];
     bitstream_t bs;
     bs_init(&bs, slice_hdr_buf, sizeof(slice_hdr_buf));
@@ -217,13 +254,13 @@ int h264_encoder_encode_frame(h264_encoder_t *encoder,
         rbsp_size - payload_offset);
     total_written += ebsp_size;
 
-    /* Dispatch GPU compute encoding pipeline */
+    /* 4. Dispatch GPU compute encoding pipeline */
     gpu_compute_begin_picture(gpu_ctx, input_surface);
     gpu_compute_dispatch_encode(gpu_ctx, input_surface, encoder->width, encoder->height);
     gpu_compute_end_picture(gpu_ctx);
     gpu_compute_sync(gpu_ctx);
 
-    /* Read back entropy data from GPU staging buffer */
+    /* 5. Read back entropy data from GPU staging buffer */
     void *staging_data = NULL;
     size_t staging_size = 0;
     if (gpu_compute_get_staging_data(gpu_ctx, &staging_data, &staging_size) == 0 && staging_data) {
@@ -234,6 +271,7 @@ int h264_encoder_encode_frame(h264_encoder_t *encoder,
             memcpy(encoder->output_buf + total_written, staging_data, entropy_bytes);
             total_written += entropy_bytes;
         }
+        gpu_compute_release_staging_data(gpu_ctx);
     }
 
     if (output_size < total_written) {
