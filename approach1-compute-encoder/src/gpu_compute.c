@@ -97,6 +97,44 @@ static void update_storage_image_descriptor(VkDevice device, VkDescriptorSet set
 }
 
 static int allocate_encoding_buffers(gpu_context_t *ctx, uint32_t width, uint32_t height) {
+    if (ctx->mv_buffer) {
+        vkDestroyBuffer(ctx->device, ctx->mv_buffer, NULL);
+        vkFreeMemory(ctx->device, ctx->mv_memory, NULL);
+        ctx->mv_buffer = VK_NULL_HANDLE;
+    }
+    if (ctx->residual_buffer) {
+        vkDestroyBuffer(ctx->device, ctx->residual_buffer, NULL);
+        vkFreeMemory(ctx->device, ctx->residual_memory, NULL);
+        ctx->residual_buffer = VK_NULL_HANDLE;
+    }
+    if (ctx->coeff_buffer) {
+        vkDestroyBuffer(ctx->device, ctx->coeff_buffer, NULL);
+        vkFreeMemory(ctx->device, ctx->coeff_memory, NULL);
+        ctx->coeff_buffer = VK_NULL_HANDLE;
+    }
+    if (ctx->quant_levels_buffer) {
+        vkDestroyBuffer(ctx->device, ctx->quant_levels_buffer, NULL);
+        vkFreeMemory(ctx->device, ctx->quant_levels_memory, NULL);
+        ctx->quant_levels_buffer = VK_NULL_HANDLE;
+    }
+    if (ctx->nz_count_buffer) {
+        vkDestroyBuffer(ctx->device, ctx->nz_count_buffer, NULL);
+        vkFreeMemory(ctx->device, ctx->nz_count_memory, NULL);
+        ctx->nz_count_buffer = VK_NULL_HANDLE;
+    }
+    if (ctx->entropy_buffer) {
+        vkDestroyBuffer(ctx->device, ctx->entropy_buffer, NULL);
+        vkFreeMemory(ctx->device, ctx->entropy_memory, NULL);
+        ctx->entropy_buffer = VK_NULL_HANDLE;
+    }
+    for (int i = 0; i < 2; i++) {
+        if (ctx->staging_buffers[i]) {
+            vkDestroyBuffer(ctx->device, ctx->staging_buffers[i], NULL);
+            vkFreeMemory(ctx->device, ctx->staging_memories[i], NULL);
+            ctx->staging_buffers[i] = VK_NULL_HANDLE;
+        }
+    }
+
     uint32_t width_in_mbs = (width + 15) / 16;
     uint32_t height_in_mbs = (height + 15) / 16;
     uint32_t num_mbs = width_in_mbs * height_in_mbs;
@@ -140,7 +178,6 @@ static int allocate_encoding_buffers(gpu_context_t *ctx, uint32_t width, uint32_
 
 static VkShaderModule load_spirv_shader(VkDevice device, const char *filename) {
     const char *search_paths[] = {
-        getenv("BC250_SHADER_DIR"),
         "/usr/share/bc250/shaders",
         "/usr/local/share/bc250/shaders",
         "/usr/lib64/dri/shaders",
@@ -154,10 +191,18 @@ static VkShaderModule load_spirv_shader(VkDevice device, const char *filename) {
     FILE *f = NULL;
     char full_path[512];
 
-    for (int i = 0; search_paths[i] != NULL; i++) {
-        snprintf(full_path, sizeof(full_path), "%s/%s", search_paths[i], filename);
+    const char *env_dir = getenv("BC250_SHADER_DIR");
+    if (env_dir && env_dir[0] != '\0') {
+        snprintf(full_path, sizeof(full_path), "%s/%s", env_dir, filename);
         f = fopen(full_path, "rb");
-        if (f) break;
+    }
+
+    if (!f) {
+        for (int i = 0; search_paths[i] != NULL; i++) {
+            snprintf(full_path, sizeof(full_path), "%s/%s", search_paths[i], filename);
+            f = fopen(full_path, "rb");
+            if (f) break;
+        }
     }
 
     if (!f) {
@@ -707,6 +752,15 @@ int gpu_compute_begin_picture(gpu_context_t *ctx, gpu_image_t render_target) {
 }
 
 int gpu_compute_dispatch_encode(gpu_context_t *ctx, gpu_image_t render_target, int width, int height) {
+    if (!ctx) return -1;
+
+    /* Ensure pipeline buffers are allocated for current dimensions */
+    if (ctx->staging_buffers[0] == VK_NULL_HANDLE || ctx->frame_width != (uint32_t)width || ctx->frame_height != (uint32_t)height) {
+        allocate_encoding_buffers(ctx, (uint32_t)width, (uint32_t)height);
+        ctx->frame_width = (uint32_t)width;
+        ctx->frame_height = (uint32_t)height;
+    }
+
     VkCommandBuffer cmd_buf = ctx->cmd_bufs[ctx->current_buf];
     uint32_t width_mbs = (width + 15) / 16;
     uint32_t height_mbs = (height + 15) / 16;

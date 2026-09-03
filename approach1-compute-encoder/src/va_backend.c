@@ -18,7 +18,12 @@ static bc250_driver_data* get_driver_data(VADriverContextP ctx) {
 }
 
 VAStatus bc250_QueryConfigProfiles(VADriverContextP ctx, VAProfile *profile_list, int *num_profiles) {
-    if (!ctx || !profile_list || !num_profiles) return VA_STATUS_ERROR_INVALID_PARAMETER;
+    if (!ctx || !num_profiles) return VA_STATUS_ERROR_INVALID_PARAMETER;
+
+    if (!profile_list) {
+        *num_profiles = 7;
+        return VA_STATUS_SUCCESS;
+    }
 
     int i = 0;
     profile_list[i++] = VAProfileH264ConstrainedBaseline;
@@ -34,7 +39,19 @@ VAStatus bc250_QueryConfigProfiles(VADriverContextP ctx, VAProfile *profile_list
 }
 
 VAStatus bc250_QueryConfigEntrypoints(VADriverContextP ctx, VAProfile profile, VAEntrypoint *entrypoint_list, int *num_entrypoints) {
-    if (!ctx || !entrypoint_list || !num_entrypoints) return VA_STATUS_ERROR_INVALID_PARAMETER;
+    if (!ctx || !num_entrypoints) return VA_STATUS_ERROR_INVALID_PARAMETER;
+
+    int expected = 0;
+    if (profile == VAProfileNone || profile == VAProfileHEVCMain10) expected = 1;
+    else if (profile == VAProfileH264Baseline || profile == VAProfileH264Main || 
+             profile == VAProfileH264High || profile == VAProfileH264ConstrainedBaseline ||
+             profile == VAProfileHEVCMain) expected = 2;
+    else return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
+
+    if (!entrypoint_list) {
+        *num_entrypoints = expected;
+        return VA_STATUS_SUCCESS;
+    }
 
     int i = 0;
     if (profile == VAProfileNone) {
@@ -128,7 +145,12 @@ VAStatus bc250_QueryConfigAttributes(VADriverContextP ctx, VAConfigID config_id,
 
 VAStatus bc250_QuerySurfaceAttributes(VADriverContextP ctx, VAConfigID config, VASurfaceAttrib *attrib_list, unsigned int *num_attribs) {
     (void)ctx; (void)config;
-    if (!attrib_list || !num_attribs) return VA_STATUS_ERROR_INVALID_PARAMETER;
+    if (!num_attribs) return VA_STATUS_ERROR_INVALID_PARAMETER;
+
+    if (!attrib_list) {
+        *num_attribs = 3;
+        return VA_STATUS_SUCCESS;
+    }
 
     int i = 0;
     attrib_list[i].type = VASurfaceAttribPixelFormat;
@@ -297,6 +319,14 @@ VAStatus bc250_CreateBuffer(VADriverContextP ctx, VAContextID context, VABufferT
             b->data = calloc(1, total_alloc);
             if (data_ptr) {
                 memcpy(b->data, data_ptr, (size_t)size * num_elements);
+            } else if (type == VAEncCodedBufferType) {
+                VACodedBufferSegment *seg = (VACodedBufferSegment *)b->data;
+                seg->size = 0;
+                seg->bit_offset = 0;
+                seg->status = 0;
+                seg->reserved = 0;
+                seg->buf = ((uint8_t *)b->data) + sizeof(VACodedBufferSegment);
+                seg->next = NULL;
             }
             *buf_id = i;
             return VA_STATUS_SUCCESS;
@@ -418,12 +448,18 @@ VAStatus bc250_EndPicture(VADriverContextP ctx, VAContextID context) {
     bc250_context *c = &data->contexts[context];
     bc250_surface *surf = &data->surfaces[c->current_render_target];
 
-    if (c->h264_enc && VALID_ID(c->coded_buf_id, MAX_BUFFERS) && data->buffers[c->coded_buf_id].allocated) {
+    if ((c->h264_enc || c->hevc_enc) && VALID_ID(c->coded_buf_id, MAX_BUFFERS) && data->buffers[c->coded_buf_id].allocated) {
         bc250_buffer *coded_buf = &data->buffers[c->coded_buf_id];
         uint8_t *dest = ((uint8_t *)coded_buf->data) + sizeof(VACodedBufferSegment);
         size_t max_out = (coded_buf->size * coded_buf->num_elements);
 
-        int written = h264_encoder_encode_frame(c->h264_enc, &data->gpu, surf->image, dest, max_out);
+        int written = -1;
+        if (c->h264_enc) {
+            written = h264_encoder_encode_frame(c->h264_enc, &data->gpu, surf->image, dest, max_out);
+        } else if (c->hevc_enc) {
+            written = hevc_encoder_encode_frame(c->hevc_enc, &data->gpu, surf->image, dest, max_out);
+        }
+
         if (written > 0) {
             VACodedBufferSegment *seg = (VACodedBufferSegment *)coded_buf->data;
             seg->size = (unsigned int)written;
@@ -546,6 +582,21 @@ VAStatus bc250_GetImage(VADriverContextP ctx, VASurfaceID surface, int x, int y,
     bc250_driver_data *data = get_driver_data(ctx);
     if (!data || !VALID_ID(surface, MAX_SURFACES) || !data->surfaces[surface].allocated) return VA_STATUS_ERROR_INVALID_SURFACE;
     if (!VALID_ID(image, MAX_IMAGES) || !data->images[image].allocated) return VA_STATUS_ERROR_INVALID_IMAGE;
+
+    bc250_surface *surf = &data->surfaces[surface];
+    bc250_image *img = &data->images[image];
+    bc250_buffer *buf = &data->buffers[img->buffer_id];
+
+    if (buf && buf->data && surf->memory.memory) {
+        void *gpu_ptr = NULL;
+        if (vkMapMemory(data->gpu.device, surf->memory.memory, 0, surf->memory.size, 0, &gpu_ptr) == VK_SUCCESS) {
+            size_t copy_bytes = (size_t)surf->width * surf->height * 3 / 2;
+            if (copy_bytes > surf->memory.size) copy_bytes = surf->memory.size;
+            if (copy_bytes > (size_t)buf->size * buf->num_elements) copy_bytes = (size_t)buf->size * buf->num_elements;
+            memcpy(buf->data, gpu_ptr, copy_bytes);
+            vkUnmapMemory(data->gpu.device, surf->memory.memory);
+        }
+    }
     return VA_STATUS_SUCCESS;
 }
 
@@ -555,6 +606,21 @@ VAStatus bc250_PutImage(VADriverContextP ctx, VASurfaceID surface, VAImageID ima
     bc250_driver_data *data = get_driver_data(ctx);
     if (!data || !VALID_ID(surface, MAX_SURFACES) || !data->surfaces[surface].allocated) return VA_STATUS_ERROR_INVALID_SURFACE;
     if (!VALID_ID(image, MAX_IMAGES) || !data->images[image].allocated) return VA_STATUS_ERROR_INVALID_IMAGE;
+
+    bc250_surface *surf = &data->surfaces[surface];
+    bc250_image *img = &data->images[image];
+    bc250_buffer *buf = &data->buffers[img->buffer_id];
+
+    if (buf && buf->data && surf->memory.memory) {
+        void *gpu_ptr = NULL;
+        if (vkMapMemory(data->gpu.device, surf->memory.memory, 0, surf->memory.size, 0, &gpu_ptr) == VK_SUCCESS) {
+            size_t copy_bytes = (size_t)surf->width * surf->height * 3 / 2;
+            if (copy_bytes > surf->memory.size) copy_bytes = surf->memory.size;
+            if (copy_bytes > (size_t)buf->size * buf->num_elements) copy_bytes = (size_t)buf->size * buf->num_elements;
+            memcpy(gpu_ptr, buf->data, copy_bytes);
+            vkUnmapMemory(data->gpu.device, surf->memory.memory);
+        }
+    }
     return VA_STATUS_SUCCESS;
 }
 
