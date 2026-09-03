@@ -23,47 +23,92 @@ include_directories(
     ${DRM_INCLUDE_DIRS}
 )
 
-# Custom target for shaders
-set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders)
+# Look for shader compilers
+find_program(GLSLANG_VALIDATOR glslangValidator)
+find_program(GLSLC glslc)
+
+set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
 file(GLOB SHADERS "${SHADER_DIR}/*.comp")
 set(SPV_OUTPUTS "")
 
+# Compile shaders
 foreach(SHADER ${SHADERS})
     get_filename_component(SHADER_NAME ${SHADER} NAME)
     set(SPV_FILE "${CMAKE_CURRENT_BINARY_DIR}/${SHADER_NAME}.spv")
     
-    add_custom_command(
-        OUTPUT ${SPV_FILE}
-        COMMAND glslangValidator -V ${SHADER} -o ${SPV_FILE}
-        DEPENDS ${SHADER}
-        COMMENT "Compiling compute shader ${SHADER_NAME}"
-    )
-    list(APPEND SPV_OUTPUTS ${SPV_FILE})
+    if(GLSLANG_VALIDATOR)
+        add_custom_command(
+            OUTPUT ${SPV_FILE}
+            COMMAND ${GLSLANG_VALIDATOR} -V ${SHADER} -o ${SPV_FILE}
+            DEPENDS ${SHADER}
+            COMMENT "Compiling compute shader ${SHADER_NAME} with glslangValidator"
+        )
+        list(APPEND SPV_OUTPUTS ${SPV_FILE})
+    elseif(GLSLC)
+        add_custom_command(
+            OUTPUT ${SPV_FILE}
+            COMMAND ${GLSLC} -c ${SHADER} -o ${SPV_FILE}
+            DEPENDS ${SHADER}
+            COMMENT "Compiling compute shader ${SHADER_NAME} with glslc"
+        )
+        list(APPEND SPV_OUTPUTS ${SPV_FILE})
+    else()
+        message(WARNING "Neither glslangValidator nor glslc found. Shaders must be compiled separately.")
+    endif()
 endforeach()
 
-add_custom_target(compile_shaders ALL DEPENDS ${SPV_OUTPUTS})
+if(SPV_OUTPUTS)
+    add_custom_target(compile_shaders ALL DEPENDS ${SPV_OUTPUTS})
+endif()
 
 # Build the VA-API driver
 set(SOURCES
     src/va_backend.c
     src/gpu_compute.c
+    src/bitstream.c
+    src/rate_control.c
+    src/encoder_h264.c
+    src/encoder_h265.c
+    src/decoder_h264.c
 )
 
 add_library(bc250_drv_video SHARED ${SOURCES})
-add_dependencies(bc250_drv_video compile_shaders)
+if(TARGET compile_shaders)
+    add_dependencies(bc250_drv_video compile_shaders)
+endif()
 
 target_link_libraries(bc250_drv_video
     ${Vulkan_LIBRARIES}
     ${LIBVA_LIBRARIES}
     ${DRM_LIBRARIES}
+    m
 )
 
-# Installation
+# Installation paths
 if(NOT LIBVA_DRIVERS_PATH)
-    set(LIBVA_DRIVERS_PATH "/usr/lib/x86_64-linux-gnu/dri/")
+    if(EXISTS "/usr/lib/x86_64-linux-gnu/dri")
+        set(LIBVA_DRIVERS_PATH "/usr/lib/x86_64-linux-gnu/dri/")
+    elseif(EXISTS "/usr/lib64/dri")
+        set(LIBVA_DRIVERS_PATH "/usr/lib64/dri/")
+    else()
+        set(LIBVA_DRIVERS_PATH "/usr/lib/dri/")
+    endif()
 endif()
 
-install(TARGETS bc250_drv_video DESTINATION ${LIBVA_DRIVERS_PATH})
+set(SHADER_INSTALL_PATH "${CMAKE_INSTALL_PREFIX}/share/bc250/shaders")
 
-message(STATUS "VA-API driver will be installed to: ${LIBVA_DRIVERS_PATH}")
-message(STATUS "To use this driver, set: LIBVA_DRIVER_NAME=bc250")
+install(TARGETS bc250_drv_video DESTINATION ${LIBVA_DRIVERS_PATH})
+if(SPV_OUTPUTS)
+    install(FILES ${SPV_OUTPUTS} DESTINATION ${SHADER_INSTALL_PATH})
+endif()
+
+# Tests
+option(BUILD_TESTS "Build test suite" ON)
+if(BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
+    add_subdirectory(tests)
+endif()
+
+message(STATUS "VA-API driver target: bc250_drv_video.so")
+message(STATUS "Driver install path: ${LIBVA_DRIVERS_PATH}")
+message(STATUS "Shader install path: ${SHADER_INSTALL_PATH}")
+message(STATUS "Usage: export LIBVA_DRIVER_NAME=bc250")
