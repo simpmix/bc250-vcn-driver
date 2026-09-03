@@ -1,0 +1,96 @@
+#version 450
+layout(local_size_x = 64) in; // RDNA 2 wavefront size
+
+// Each workgroup handles one 16x16 macroblock
+
+layout(set = 0, binding = 0, r8) uniform readonly image2D currentImage;
+layout(set = 0, binding = 1, r8) uniform readonly image2D referenceImage;
+
+struct MotionVector {
+    ivec2 mv;
+    uint sad;
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer OutputMV {
+    MotionVector mvs[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint frame_width;
+    uint frame_height;
+    uint search_range;
+    uint lambda_motion;
+} pcs;
+
+shared float search_window[48][48];
+shared float current_mb[16][16];
+
+void main() {
+    uint mb_x = gl_WorkGroupID.x;
+    uint mb_y = gl_WorkGroupID.y;
+    uint mb_idx = mb_y * (pcs.frame_width / 16) + mb_x;
+
+    uint local_id = gl_LocalInvocationIndex;
+    uint lx = local_id % 16;
+    uint ly = local_id / 16;
+
+    ivec2 mb_pos = ivec2(mb_x * 16, mb_y * 16);
+
+    // Load current macroblock (16x16 = 256 pixels, each thread loads 4 pixels)
+    for (int i = 0; i < 4; i++) {
+        uint p_idx = local_id * 4 + i;
+        uint px = p_idx % 16;
+        uint py = p_idx / 16;
+        ivec2 coord = mb_pos + ivec2(px, py);
+        current_mb[py][px] = imageLoad(currentImage, coord).r;
+    }
+
+    // Load search window (48x48) - 16 threads row, each thread loads multiple pixels
+    // simplified for brevity:
+    for (int i = 0; i < 36; i++) {
+        uint p_idx = local_id * 36 + i;
+        if (p_idx < 2304) {
+            uint px = p_idx % 48;
+            uint py = p_idx / 48;
+            ivec2 coord = mb_pos + ivec2(px, py) - ivec2(16, 16);
+            coord = clamp(coord, ivec2(0), ivec2(pcs.frame_width - 1, pcs.frame_height - 1));
+            search_window[py][px] = imageLoad(referenceImage, coord).r;
+        }
+    }
+    
+    barrier();
+
+    if (local_id == 0) {
+        // Diamond search (simplified)
+        ivec2 best_mv = ivec2(0);
+        uint best_sad = 0xFFFFFFFF;
+        
+        ivec2 candidates[5] = { ivec2(0,0), ivec2(0,1), ivec2(0,-1), ivec2(1,0), ivec2(-1,0) };
+        
+        for (int step = 8; step >= 1; step /= 2) {
+            ivec2 current_center = best_mv;
+            for(int i = 0; i < 5; i++) {
+                ivec2 test_mv = current_center + candidates[i] * step;
+                if(abs(test_mv.x) > 16 || abs(test_mv.y) > 16) continue;
+                
+                uint sad = 0;
+                for(int y = 0; y < 16; y++) {
+                    for(int x = 0; x < 16; x++) {
+                        float curr = current_mb[y][x];
+                        float ref = search_window[y + 16 + test_mv.y][x + 16 + test_mv.x];
+                        sad += uint(abs(curr - ref) * 255.0);
+                    }
+                }
+                
+                uint cost = sad + pcs.lambda_motion * (abs(test_mv.x) + abs(test_mv.y));
+                if (cost < best_sad) {
+                    best_sad = cost;
+                    best_mv = test_mv;
+                }
+            }
+        }
+        
+        mvs[mb_idx].mv = best_mv;
+        mvs[mb_idx].sad = best_sad;
+    }
+}

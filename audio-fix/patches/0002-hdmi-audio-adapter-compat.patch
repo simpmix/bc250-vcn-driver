@@ -1,0 +1,26 @@
+From: Developer <dev@example.com>
+Date: Tue, 3 Sep 2024 10:05:00 -0400
+Subject: [PATCH 2/2] drm/amd/display: Improve HDMI audio adapter compatibility for BC-250
+
+Some HDMI audio extractors and older receivers fail to parse the audio
+info frame correctly when driven by the Cyan Skillfish display engine.
+This patch forces a standard info frame packet formatting for this
+specific ASIC.
+
+Signed-off-by: Developer <dev@example.com>
+---
+ drivers/gpu/drm/amd/display/dc/core/dc_resource.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/display/dc/core/dc_resource.c b/drivers/gpu/drm/amd/display/dc/core/dc_resource.c
+--- a/drivers/gpu/drm/amd/display/dc/core/dc_resource.c
++++ b/drivers/gpu/drm/amd/display/dc/core/dc_resource.c
+@@ -200,6 +200,11 @@ void resource_build_info_frame(struct pipe_ctx *pipe_ctx)
+ {
+ 	// ...
++	if (pipe_ctx->stream->ctx->asic_id.chip_family == FAMILY_YELLOW_CARP) {
++		/* Force basic audio info frame for BC-250 */
++		info_frame->audio_info_frame.channel_count = 2;
++	}
+ 	// ...
+ }

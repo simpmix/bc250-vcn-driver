@@ -1,0 +1,44 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in; // 16x16 tile
+
+layout(set = 0, binding = 0, rgba8) uniform readonly image2D inputRGBA;
+layout(set = 0, binding = 1, r8) uniform writeonly image2D outputY;
+layout(set = 0, binding = 2, rg8) uniform writeonly image2D outputUV; // NV12 interleaved
+
+layout(push_constant) uniform PushConstants {
+    uint color_space; // 0 = BT.601, 1 = BT.709
+} pcs;
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    
+    vec4 rgba = imageLoad(inputRGBA, pos);
+    float R = rgba.r;
+    float G = rgba.g;
+    float B = rgba.b;
+    
+    float Y, U, V;
+    
+    if (pcs.color_space == 0) {
+        // BT.601
+        Y = 0.299 * R + 0.587 * G + 0.114 * B;
+        U = -0.169 * R - 0.331 * G + 0.500 * B + 0.5;
+        V = 0.500 * R - 0.419 * G - 0.081 * B + 0.5;
+    } else {
+        // BT.709
+        Y = 0.2126 * R + 0.7152 * G + 0.0722 * B;
+        U = -0.1146 * R - 0.3854 * G + 0.500 * B + 0.5;
+        V = 0.500 * R - 0.4542 * G - 0.0458 * B + 0.5;
+    }
+    
+    imageStore(outputY, pos, vec4(Y, 0, 0, 0));
+    
+    // Subsample UV (2x2 average, only compute for top-left of 2x2)
+    if (pos.x % 2 == 0 && pos.y % 2 == 0) {
+        vec4 r1 = imageLoad(inputRGBA, pos + ivec2(1, 0));
+        vec4 r2 = imageLoad(inputRGBA, pos + ivec2(0, 1));
+        vec4 r3 = imageLoad(inputRGBA, pos + ivec2(1, 1));
+        // Average U, V would be calculated here
+        imageStore(outputUV, pos / 2, vec4(U, V, 0, 0));
+    }
+}

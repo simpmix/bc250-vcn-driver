@@ -1,0 +1,62 @@
+#version 450
+layout(local_size_x = 24) in; // 16 luma + 8 chroma blocks
+
+layout(std430, set = 0, binding = 0) readonly buffer InputResiduals {
+    int res[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer OutputCoeffs {
+    int coeffs[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint frame_width_in_mbs;
+    uint transform_type; // 0 = forward, 1 = inverse
+} pcs;
+
+// H.264 Forward 4x4 Core Transform
+void forward_4x4(in int[16] input, out int[16] output) {
+    int tmp[16];
+    // Rows
+    for (int i = 0; i < 4; i++) {
+        int r = i * 4;
+        tmp[r+0] = input[r+0] + input[r+3];
+        tmp[r+1] = input[r+1] + input[r+2];
+        tmp[r+2] = input[r+1] - input[r+2];
+        tmp[r+3] = input[r+0] - input[r+3];
+    }
+    
+    // Cols
+    for (int j = 0; j < 4; j++) {
+        output[0*4+j] = tmp[0*4+j] + tmp[1*4+j];
+        output[1*4+j] = (tmp[0*4+j] << 1) + tmp[1*4+j]; // simplified
+        output[2*4+j] = tmp[0*4+j] - tmp[1*4+j];
+        output[3*4+j] = tmp[0*4+j] - (tmp[1*4+j] << 1); // simplified
+    }
+}
+
+void main() {
+    uint mb_x = gl_WorkGroupID.x;
+    uint mb_y = gl_WorkGroupID.y;
+    uint mb_idx = mb_y * pcs.frame_width_in_mbs + mb_x;
+    uint block_idx = gl_LocalInvocationIndex; // 0-15 luma, 16-19 Cb, 20-23 Cr
+
+    int block_data[16];
+    uint global_block_idx = mb_idx * 24 + block_idx;
+    
+    for (int i = 0; i < 16; i++) {
+        block_data[i] = res[global_block_idx * 16 + i];
+    }
+
+    int transformed[16];
+    if (pcs.transform_type == 0) {
+        forward_4x4(block_data, transformed);
+    } else {
+        // Inverse transform placeholder
+        forward_4x4(block_data, transformed); 
+    }
+
+    for (int i = 0; i < 16; i++) {
+        coeffs[global_block_idx * 16 + i] = transformed[i];
+    }
+}

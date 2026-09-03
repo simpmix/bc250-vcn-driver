@@ -1,0 +1,62 @@
+#version 450
+layout(local_size_x = 24) in; // 24 blocks per MB
+
+layout(std430, set = 0, binding = 0) readonly buffer InputCoeffs {
+    int coeffs[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer OutputLevels {
+    int levels[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer NonZeroCount {
+    uint nzc[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint qp;
+    uint is_intra;
+    uint frame_width_in_mbs;
+} pcs;
+
+const int MF[6][3] = {
+    {13107, 5243, 8066},
+    {11916, 4660, 7490},
+    {10082, 4194, 6554},
+    {9362,  3647, 5825},
+    {8192,  3355, 5243},
+    {7282,  2893, 4559}
+};
+
+void main() {
+    uint mb_x = gl_WorkGroupID.x;
+    uint mb_y = gl_WorkGroupID.y;
+    uint mb_idx = mb_y * pcs.frame_width_in_mbs + mb_x;
+    uint block_idx = gl_LocalInvocationIndex;
+    uint global_block_idx = mb_idx * 24 + block_idx;
+    
+    int qp_per = int(pcs.qp / 6);
+    int qp_rem = int(pcs.qp % 6);
+    
+    // f for dead-zone
+    int f = (1 << (15 + qp_per)) / (pcs.is_intra == 1 ? 3 : 6);
+    
+    uint count = 0;
+    
+    for (int i = 0; i < 16; i++) {
+        int coeff = coeffs[global_block_idx * 16 + i];
+        int sign = coeff < 0 ? -1 : 1;
+        int abs_coeff = abs(coeff);
+        
+        // Matrix index based on pos
+        int m_idx = (i%2 == 0) ? 0 : 1; // Simplified mapping
+        
+        int level = (abs_coeff * MF[qp_rem][m_idx] + f) >> (15 + qp_per);
+        level *= sign;
+        
+        levels[global_block_idx * 16 + i] = level;
+        if (level != 0) count++;
+    }
+    
+    nzc[global_block_idx] = count;
+}

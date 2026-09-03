@@ -1,0 +1,46 @@
+#version 450
+layout(local_size_x = 24) in; // 24 blocks per MB
+
+layout(std430, set = 0, binding = 0) readonly buffer QuantizedLevels {
+    int levels[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer OutputBitstream {
+    uint bits[]; // Packed bitstream segments
+};
+
+// Zigzag scan pattern for 4x4 block
+const int zigzag[16] = {
+    0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15
+};
+
+void main() {
+    uint mb_x = gl_WorkGroupID.x;
+    uint mb_y = gl_WorkGroupID.y;
+    uint global_block_idx = (mb_y * 128 + mb_x) * 24 + gl_LocalInvocationIndex; // Simplified grid
+    
+    // CAVLC coding (simplified context-adaptive variable-length coding)
+    // CABAC cannot be easily parallelized on GPU due to serial context modeling dependencies
+    
+    int total_coeff = 0;
+    int trailing_ones = 0;
+    int run_before[16];
+    int nonzero[16];
+    
+    for (int i = 0; i < 16; i++) {
+        int level = levels[global_block_idx * 16 + zigzag[i]];
+        if (level != 0) {
+            nonzero[total_coeff] = level;
+            total_coeff++;
+            if (abs(level) == 1 && trailing_ones < 3) {
+                trailing_ones++;
+            } else {
+                trailing_ones = 0;
+            }
+        }
+    }
+    
+    // Pack data into bitstream buffer (simplified packing)
+    uint packed = (total_coeff & 0xFF) | ((trailing_ones & 0xFF) << 8);
+    bits[global_block_idx] = packed;
+}
