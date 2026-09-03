@@ -1,3 +1,4 @@
+/* bc250-vcn-driver v0.1.0 - https://github.com/Kai/bc250-vcn-driver */
 #ifndef BC250_VA_BACKEND_H
 #define BC250_VA_BACKEND_H
 

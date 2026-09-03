@@ -1,3 +1,4 @@
+# bc250-vcn-driver v0.1.0 - https://github.com/Kai/bc250-vcn-driver
 #!/usr/bin/env python3
 # MIT License
 import os

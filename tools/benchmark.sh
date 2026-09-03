@@ -1,4 +1,5 @@
 #!/bin/bash
+# bc250-vcn-driver v0.1.0 - https://github.com/Kai/bc250-vcn-driver
 # MIT License
 # Benchmark encoder performance
 

@@ -1,3 +1,4 @@
+/* bc250-vcn-driver v0.1.0 - https://github.com/Kai/bc250-vcn-driver */
 #include "va_backend.h"
 #include <stdlib.h>
 #include <string.h>

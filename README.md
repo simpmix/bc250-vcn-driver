@@ -48,3 +48,5 @@ Userspace tools and scripts are licensed under MIT.
 
 ## Disclaimer
 **WARNING:** This project interfaces directly with hardware registers and modifies kernel modules. It is provided AS-IS. Incorrect register writes could potentially damage hardware or cause system instability. Use at your own risk.
+
+<!-- bc250-vcn-driver v0.1.0 -->

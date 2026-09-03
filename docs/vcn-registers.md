@@ -23,3 +23,5 @@ If firmware fails to load (due to PSP locks), the VCPU will not transition out o
 
 ## Research Goals
 Can we bypass the PSP validation by writing directly to `mmUVD_VCPU_CNTL` and sideloading firmware into the instruction cache, or is the memory bus strictly isolated by hardware fuses?
+
+<!-- bc250-vcn-driver v0.1.0 -->

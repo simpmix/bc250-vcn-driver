@@ -1,3 +1,4 @@
+/* bc250-vcn-driver v0.1.0 - https://github.com/Kai/bc250-vcn-driver */
 /*
  * AMD BC-250 (Cyan Skillfish) VCN Register-Level Bypass Module
  *

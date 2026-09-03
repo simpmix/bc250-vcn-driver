@@ -1,3 +1,4 @@
+# bc250-vcn-driver v0.1.0 - https://github.com/Kai/bc250-vcn-driver
 cmake_minimum_required(VERSION 3.16)
 project(bc250-compute-encoder C)
 

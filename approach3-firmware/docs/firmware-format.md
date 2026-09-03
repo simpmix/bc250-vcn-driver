@@ -33,3 +33,5 @@ When inspecting the official firmware blob:
 1. We parse the common header.
 2. We extract the `ucode_data`.
 3. The remaining data may contain signatures or PSP-specific metadata.
+
+<!-- bc250-vcn-driver v0.1.0 -->

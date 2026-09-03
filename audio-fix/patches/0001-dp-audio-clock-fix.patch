@@ -32,3 +32,4 @@ diff --git a/drivers/gpu/drm/amd/display/dc/dccg/dccg.c b/drivers/gpu/drm/amd/di
 +
  	// Apply DTO...
  }
+

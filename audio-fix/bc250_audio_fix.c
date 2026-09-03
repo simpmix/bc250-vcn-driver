@@ -1,3 +1,4 @@
+/* bc250-vcn-driver v0.1.0 - https://github.com/Kai/bc250-vcn-driver */
 /*
  * bc250_audio_fix.c - AMD BC-250 (Cyan Skillfish) Audio Clock Fix
  *
