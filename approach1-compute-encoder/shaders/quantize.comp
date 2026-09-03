@@ -1,6 +1,6 @@
 /* bc250-vcn-driver v0.1.0 - https://github.com/Kai/bc250-vcn-driver */
 #version 450
-layout(local_size_x = 24) in; // 24 blocks per MB
+layout(local_size_x = 32) in; // Wave32 aligned
 
 layout(std430, set = 0, binding = 0) readonly buffer InputCoeffs {
     int coeffs[];
@@ -15,11 +15,19 @@ layout(std430, set = 0, binding = 2) writeonly buffer NonZeroCount {
 };
 
 layout(push_constant) uniform PushConstants {
+    uint frame_width;
+    uint frame_height;
+    uint width_in_mbs;
+    uint height_in_mbs;
     uint qp;
     uint is_intra;
-    uint frame_width_in_mbs;
+    uint color_space;
+    uint lambda_motion;
 } pcs;
 
+// H.264 Multiplication Factor Table (ITU-T Rec. H.264 section 8.5.9 Table 8-14)
+// Indices: [qp % 6][position_type]
+// position_type: 0 for (0,0),(0,2),(2,0),(2,2); 1 for (1,1),(1,3),(3,1),(3,3); 2 for other positions
 const int MF[6][3] = {
     {13107, 5243, 8066},
     {11916, 4660, 7490},
@@ -29,35 +37,46 @@ const int MF[6][3] = {
     {7282,  2893, 4559}
 };
 
+int get_pos_type(int idx) {
+    int r = idx / 4;
+    int c = idx % 4;
+    int r_even = r & 1;
+    int c_even = c & 1;
+    if (r_even == 0 && c_even == 0) return 0;
+    if (r_even == 1 && c_even == 1) return 1;
+    return 2;
+}
+
 void main() {
     uint mb_x = gl_WorkGroupID.x;
     uint mb_y = gl_WorkGroupID.y;
-    uint mb_idx = mb_y * pcs.frame_width_in_mbs + mb_x;
+    if (mb_x >= pcs.width_in_mbs || mb_y >= pcs.height_in_mbs) return;
+
     uint block_idx = gl_LocalInvocationIndex;
+    if (block_idx >= 24) return;
+
+    uint mb_idx = mb_y * pcs.width_in_mbs + mb_x;
     uint global_block_idx = mb_idx * 24 + block_idx;
-    
+
     int qp_per = int(pcs.qp / 6);
     int qp_rem = int(pcs.qp % 6);
-    
-    // f for dead-zone
+
+    // Rounding offset: 1/3 for intra, 1/6 for inter
     int f = (1 << (15 + qp_per)) / (pcs.is_intra == 1 ? 3 : 6);
-    
     uint count = 0;
-    
+
     for (int i = 0; i < 16; i++) {
         int coeff = coeffs[global_block_idx * 16 + i];
         int sign = coeff < 0 ? -1 : 1;
         int abs_coeff = abs(coeff);
-        
-        // Matrix index based on pos
-        int m_idx = (i%2 == 0) ? 0 : 1; // Simplified mapping
-        
-        int level = (abs_coeff * MF[qp_rem][m_idx] + f) >> (15 + qp_per);
+
+        int pos_type = get_pos_type(i);
+        int level = (abs_coeff * MF[qp_rem][pos_type] + f) >> (15 + qp_per);
         level *= sign;
-        
+
         levels[global_block_idx * 16 + i] = level;
         if (level != 0) count++;
     }
-    
+
     nzc[global_block_idx] = count;
 }

@@ -423,7 +423,7 @@ int bc250_gpu_init(bc250_gpu_context_t *ctx) {
     VkPushConstantRange pc_range = {
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
         .offset = 0,
-        .size = sizeof(uint32_t) * 4
+        .size = sizeof(uint32_t) * 8
     };
 
     /* Pipeline Layouts */
@@ -691,7 +691,7 @@ int gpu_compute_dispatch_encode(gpu_context_t *ctx, gpu_image_t render_target, i
     VkCommandBuffer cmd_buf = ctx->cmd_bufs[ctx->current_buf];
     uint32_t width_mbs = (width + 15) / 16;
     uint32_t height_mbs = (height + 15) / 16;
-    uint32_t pc[4] = { (uint32_t)width, (uint32_t)height, width_mbs, height_mbs };
+    uint32_t pc[8] = { (uint32_t)width, (uint32_t)height, width_mbs, height_mbs, 26, 0, 0, 5 };
 
     /* Update image descriptors to point to the current surface */
     if (render_target.y_view && render_target.uv_view) {

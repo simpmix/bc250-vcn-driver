@@ -1,8 +1,6 @@
 /* bc250-vcn-driver v0.1.0 - https://github.com/Kai/bc250-vcn-driver */
 #version 450
-layout(local_size_x = 64) in; // RDNA 2 wavefront size
-
-// Each workgroup handles one 16x16 macroblock
+layout(local_size_x = 64) in; // Wavefront-aligned (RDNA2 Wave64 / Dual Wave32)
 
 layout(set = 0, binding = 0, r8) uniform readonly image2D currentImage;
 layout(set = 0, binding = 1, r8) uniform readonly image2D referenceImage;
@@ -19,35 +17,38 @@ layout(std430, set = 0, binding = 2) writeonly buffer OutputMV {
 layout(push_constant) uniform PushConstants {
     uint frame_width;
     uint frame_height;
-    uint search_range;
+    uint width_in_mbs;
+    uint height_in_mbs;
+    uint qp;
+    uint is_intra;
+    uint color_space;
     uint lambda_motion;
 } pcs;
 
 shared float search_window[48][48];
 shared float current_mb[16][16];
+shared uint thread_sad[64];
 
 void main() {
     uint mb_x = gl_WorkGroupID.x;
     uint mb_y = gl_WorkGroupID.y;
-    uint mb_idx = mb_y * (pcs.frame_width / 16) + mb_x;
+    if (mb_x >= pcs.width_in_mbs || mb_y >= pcs.height_in_mbs) return;
 
+    uint mb_idx = mb_y * pcs.width_in_mbs + mb_x;
     uint local_id = gl_LocalInvocationIndex;
-    uint lx = local_id % 16;
-    uint ly = local_id / 16;
-
     ivec2 mb_pos = ivec2(mb_x * 16, mb_y * 16);
 
-    // Load current macroblock (16x16 = 256 pixels, each thread loads 4 pixels)
+    // 1. Cooperative load of current macroblock (16x16 = 256 pixels across 64 threads)
     for (int i = 0; i < 4; i++) {
         uint p_idx = local_id * 4 + i;
         uint px = p_idx % 16;
         uint py = p_idx / 16;
         ivec2 coord = mb_pos + ivec2(px, py);
+        coord = clamp(coord, ivec2(0), ivec2(pcs.frame_width - 1, pcs.frame_height - 1));
         current_mb[py][px] = imageLoad(currentImage, coord).r;
     }
 
-    // Load search window (48x48) - 16 threads row, each thread loads multiple pixels
-    // simplified for brevity:
+    // 2. Cooperative load of search window (48x48 = 2304 pixels, 36 pixels per thread)
     for (int i = 0; i < 36; i++) {
         uint p_idx = local_id * 36 + i;
         if (p_idx < 2304) {
@@ -58,40 +59,60 @@ void main() {
             search_window[py][px] = imageLoad(referenceImage, coord).r;
         }
     }
-    
+
     barrier();
 
-    if (local_id == 0) {
-        // Diamond search (simplified)
-        ivec2 best_mv = ivec2(0);
-        uint best_sad = 0xFFFFFFFF;
-        
-        ivec2 candidates[5] = { ivec2(0,0), ivec2(0,1), ivec2(0,-1), ivec2(1,0), ivec2(-1,0) };
-        
-        for (int step = 8; step >= 1; step /= 2) {
-            ivec2 current_center = best_mv;
-            for(int i = 0; i < 5; i++) {
-                ivec2 test_mv = current_center + candidates[i] * step;
-                if(abs(test_mv.x) > 16 || abs(test_mv.y) > 16) continue;
-                
-                uint sad = 0;
-                for(int y = 0; y < 16; y++) {
-                    for(int x = 0; x < 16; x++) {
-                        float curr = current_mb[y][x];
-                        float ref = search_window[y + 16 + test_mv.y][x + 16 + test_mv.x];
-                        sad += uint(abs(curr - ref) * 255.0);
-                    }
-                }
-                
-                uint cost = sad + pcs.lambda_motion * (abs(test_mv.x) + abs(test_mv.y));
-                if (cost < best_sad) {
-                    best_sad = cost;
+    // 3. Hierarchical Diamond Search
+    ivec2 best_mv = ivec2(0);
+    uint best_cost = 0xFFFFFFFF;
+    ivec2 diamond[5] = { ivec2(0,0), ivec2(0,1), ivec2(0,-1), ivec2(1,0), ivec2(-1,0) };
+
+    for (int step = 8; step >= 1; step /= 2) {
+        ivec2 center = best_mv;
+        for (int c = 0; c < 5; c++) {
+            ivec2 test_mv = center + diamond[c] * step;
+            if (abs(test_mv.x) > 16 || abs(test_mv.y) > 16) continue;
+
+            // Compute SAD for 4 pixels per thread in parallel
+            uint local_diff = 0;
+            for (int i = 0; i < 4; i++) {
+                uint p_idx = local_id * 4 + i;
+                uint px = p_idx % 16;
+                uint py = p_idx / 16;
+                float curr = current_mb[py][px];
+                float ref = search_window[py + 16 + test_mv.y][px + 16 + test_mv.x];
+                local_diff += uint(abs(curr - ref) * 255.0);
+            }
+            thread_sad[local_id] = local_diff;
+
+            barrier();
+
+            // Parallel Reduction across 64 threads
+            if (local_id < 32) thread_sad[local_id] += thread_sad[local_id + 32];
+            barrier();
+            if (local_id < 16) thread_sad[local_id] += thread_sad[local_id + 16];
+            barrier();
+            if (local_id < 8) thread_sad[local_id] += thread_sad[local_id + 8];
+            barrier();
+            if (local_id < 4) thread_sad[local_id] += thread_sad[local_id + 4];
+            barrier();
+            if (local_id < 2) thread_sad[local_id] += thread_sad[local_id + 2];
+            barrier();
+
+            if (local_id == 0) {
+                uint total_sad = thread_sad[0] + thread_sad[1];
+                uint cost = total_sad + pcs.lambda_motion * uint(abs(test_mv.x) + abs(test_mv.y));
+                if (cost < best_cost) {
+                    best_cost = cost;
                     best_mv = test_mv;
                 }
             }
+            barrier();
         }
-        
+    }
+
+    if (local_id == 0) {
         mvs[mb_idx].mv = best_mv;
-        mvs[mb_idx].sad = best_sad;
+        mvs[mb_idx].sad = best_cost;
     }
 }

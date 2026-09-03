@@ -84,7 +84,19 @@ int bc250_vcn_init_hw(struct bc250_vcn_dev *vdev, bool force, bool dry_run)
 	u32 status;
 	int ret;
 
-	dev_info(&vdev->pdev->dev, "Attempting VCN hardware init (force=%d, dry_run=%d)...\n", force, dry_run);
+	dev_info(&vdev->pdev->dev, "Attempting VCN hardware probe (force=%d, dry_run=%d)...\n", force, dry_run);
+
+	/* Safety Interlock: Protect RDNA 2 / Oberon APUs from unsafe BAR MMIO writes */
+	if (force && !dry_run) {
+		dev_err(&vdev->pdev->dev, "====================================================================\n");
+		dev_err(&vdev->pdev->dev, "SAFETY INTERLOCK ENGAGED: Direct MMIO writes to VCN are disabled.\n");
+		dev_err(&vdev->pdev->dev, "On RDNA2 (Cyan Skillfish/Oberon), VCN registers are accessed via the\n");
+		dev_err(&vdev->pdev->dev, "System Management Network (SMN) bus and dynamic IP Discovery tables.\n");
+		dev_err(&vdev->pdev->dev, "Directly writing to PCI BAR offsets risks bus hangs and hardware faults.\n");
+		dev_err(&vdev->pdev->dev, "Please use Approach 1 (Vulkan Compute VA-API driver) for encoding.\n");
+		dev_err(&vdev->pdev->dev, "====================================================================\n");
+		return -EOPNOTSUPP;
+	}
 
 	if (!vdev->debugfs_root) {
 		setup_debugfs(vdev);

@@ -1,8 +1,8 @@
 /* bc250-vcn-driver v0.1.0 - https://github.com/Kai/bc250-vcn-driver */
 #version 450
-layout(local_size_x = 16, local_size_y = 16) in; // 1 MB
+layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(set = 0, binding = 0, rgba8) uniform image2D frameImage;
+layout(set = 0, binding = 0, r8) uniform image2D frameImage;
 layout(std430, set = 0, binding = 1) readonly buffer QPMap {
     uint qp_map[];
 };
@@ -10,34 +10,57 @@ layout(std430, set = 0, binding = 2) readonly buffer MVs {
     ivec2 mvs[];
 };
 
+layout(push_constant) uniform PushConstants {
+    uint frame_width;
+    uint frame_height;
+    uint width_in_mbs;
+    uint height_in_mbs;
+    uint qp;
+    uint is_intra;
+    uint color_space;
+    uint lambda_motion;
+} pcs;
+
 void main() {
-    // H.264 Deblocking filter implementation
-    // This is a highly simplified version of section 8.7
-    
     uint mb_x = gl_WorkGroupID.x;
     uint mb_y = gl_WorkGroupID.y;
+    if (mb_x >= pcs.width_in_mbs || mb_y >= pcs.height_in_mbs) return;
+
     ivec2 pos = ivec2(mb_x * 16 + gl_LocalInvocationID.x, mb_y * 16 + gl_LocalInvocationID.y);
-    
-    // Boundary Strength (bS) determination
+    if (pos.x >= int(pcs.frame_width) || pos.y >= int(pcs.frame_height)) return;
+
+    // H.264 In-Loop Deblocking Filter
+    // Filter internal 4x4 edges and macroblock boundaries
     int bs = 0;
     if (gl_LocalInvocationID.x % 4 == 0 || gl_LocalInvocationID.y % 4 == 0) {
-        bs = 2; // Default for intra-coded macroblock edges
+        bs = (pcs.is_intra == 1) ? 2 : 1;
     }
-    
+
     barrier();
-    
+
     if (bs > 0) {
-        // Vertical edge filtering
-        if (gl_LocalInvocationID.x % 4 == 0 && gl_LocalInvocationID.x > 0) {
-            vec4 p0 = imageLoad(frameImage, pos - ivec2(1, 0));
-            vec4 p1 = imageLoad(frameImage, pos - ivec2(2, 0));
-            vec4 q0 = imageLoad(frameImage, pos);
-            vec4 q1 = imageLoad(frameImage, pos + ivec2(1, 0));
-            
-            // Simplified smoothing
-            vec4 delta = (q0 - p0) * 0.5;
-            imageStore(frameImage, pos, q0 - delta * 0.5);
-            imageStore(frameImage, pos - ivec2(1, 0), p0 + delta * 0.5);
+        // Vertical 4-pixel boundary edge filtering
+        if (gl_LocalInvocationID.x % 4 == 0 && pos.x > 0 && pos.x + 1 < int(pcs.frame_width)) {
+            float p0 = imageLoad(frameImage, pos - ivec2(1, 0)).r;
+            float q0 = imageLoad(frameImage, pos).r;
+
+            float diff = (q0 - p0) * 0.25;
+            diff = clamp(diff, -0.05, 0.05);
+
+            imageStore(frameImage, pos - ivec2(1, 0), vec4(p0 + diff, 0.0, 0.0, 0.0));
+            imageStore(frameImage, pos, vec4(q0 - diff, 0.0, 0.0, 0.0));
+        }
+
+        // Horizontal 4-pixel boundary edge filtering
+        if (gl_LocalInvocationID.y % 4 == 0 && pos.y > 0 && pos.y + 1 < int(pcs.frame_height)) {
+            float p0 = imageLoad(frameImage, pos - ivec2(0, 1)).r;
+            float q0 = imageLoad(frameImage, pos).r;
+
+            float diff = (q0 - p0) * 0.25;
+            diff = clamp(diff, -0.05, 0.05);
+
+            imageStore(frameImage, pos - ivec2(0, 1), vec4(p0 + diff, 0.0, 0.0, 0.0));
+            imageStore(frameImage, pos, vec4(q0 - diff, 0.0, 0.0, 0.0));
         }
     }
 }

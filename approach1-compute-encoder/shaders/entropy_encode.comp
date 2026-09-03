@@ -1,47 +1,72 @@
 /* bc250-vcn-driver v0.1.0 - https://github.com/Kai/bc250-vcn-driver */
 #version 450
-layout(local_size_x = 24) in; // 24 blocks per MB
+layout(local_size_x = 32) in; // Wave32 aligned
 
 layout(std430, set = 0, binding = 0) readonly buffer QuantizedLevels {
     int levels[];
 };
 
 layout(std430, set = 0, binding = 1) writeonly buffer OutputBitstream {
-    uint bits[]; // Packed bitstream segments
+    uint bits[]; // Packed CAVLC entropy symbols per block
 };
 
-// Zigzag scan pattern for 4x4 block
+layout(push_constant) uniform PushConstants {
+    uint frame_width;
+    uint frame_height;
+    uint width_in_mbs;
+    uint height_in_mbs;
+    uint qp;
+    uint is_intra;
+    uint color_space;
+    uint lambda_motion;
+} pcs;
+
+// H.264 Zigzag scan order for 4x4 block
 const int zigzag[16] = {
-    0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15
+    0,  1,  4,  8,
+    5,  2,  3,  6,
+    9, 12, 13, 10,
+    7, 11, 14, 15
 };
 
 void main() {
     uint mb_x = gl_WorkGroupID.x;
     uint mb_y = gl_WorkGroupID.y;
-    uint global_block_idx = (mb_y * 128 + mb_x) * 24 + gl_LocalInvocationIndex; // Simplified grid
-    
-    // CAVLC coding (simplified context-adaptive variable-length coding)
-    // CABAC cannot be easily parallelized on GPU due to serial context modeling dependencies
-    
+    if (mb_x >= pcs.width_in_mbs || mb_y >= pcs.height_in_mbs) return;
+
+    uint block_idx = gl_LocalInvocationIndex;
+    if (block_idx >= 24) return;
+
+    uint mb_idx = mb_y * pcs.width_in_mbs + mb_x;
+    uint global_block_idx = mb_idx * 24 + block_idx;
+
     int total_coeff = 0;
     int trailing_ones = 0;
-    int run_before[16];
-    int nonzero[16];
-    
+    uint packed_signs = 0;
+    uint packed_magnitudes = 0;
+
+    // Scan block in zigzag order
     for (int i = 0; i < 16; i++) {
         int level = levels[global_block_idx * 16 + zigzag[i]];
         if (level != 0) {
-            nonzero[total_coeff] = level;
             total_coeff++;
             if (abs(level) == 1 && trailing_ones < 3) {
                 trailing_ones++;
+                if (level < 0) {
+                    packed_signs |= (1 << (trailing_ones - 1));
+                }
             } else {
                 trailing_ones = 0;
+                packed_magnitudes = (packed_magnitudes << 4) | (uint(abs(level)) & 0x0F);
             }
         }
     }
-    
-    // Pack data into bitstream buffer (simplified packing)
-    uint packed = (total_coeff & 0xFF) | ((trailing_ones & 0xFF) << 8);
+
+    // Pack: [bits 0..7: total_coeff] [bits 8..15: trailing_ones] [bits 16..23: signs] [bits 24..31: flags]
+    uint packed = (uint(total_coeff) & 0xFF) |
+                  ((uint(trailing_ones) & 0xFF) << 8) |
+                  ((packed_signs & 0xFF) << 16) |
+                  ((packed_magnitudes & 0xFF) << 24);
+
     bits[global_block_idx] = packed;
 }
