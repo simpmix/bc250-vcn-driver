@@ -713,6 +713,14 @@ VAStatus bc250_Initialize(VADriverContextP ctx, int *major_version, int *minor_v
     return VA_STATUS_SUCCESS;
 }
 
-VA_DRIVER_INIT_FUNC(__vaDriverInit_1_0) {
-    return bc250_Initialize(ctx, major_version, minor_version);
+VAStatus __vaDriverInit_1_0(VADriverContextP ctx) {
+    int major = VA_MAJOR_VERSION;
+    int minor = VA_MINOR_VERSION;
+    return bc250_Initialize(ctx, &major, &minor);
+}
+
+VAStatus __vaDriverInit_0_32(VADriverContextP ctx) {
+    int major = VA_MAJOR_VERSION;
+    int minor = VA_MINOR_VERSION;
+    return bc250_Initialize(ctx, &major, &minor);
 }

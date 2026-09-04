@@ -119,6 +119,8 @@ typedef struct {
 } bc250_driver_data;
 
 /* Core VA-API Driver Functions */
+VAStatus __vaDriverInit_1_0(VADriverContextP ctx);
+VAStatus __vaDriverInit_0_32(VADriverContextP ctx);
 VAStatus bc250_Initialize(VADriverContextP ctx, int *major_version, int *minor_version);
 VAStatus bc250_Terminate(VADriverContextP ctx);
 
