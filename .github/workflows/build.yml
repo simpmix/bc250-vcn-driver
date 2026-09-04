@@ -7,6 +7,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -26,7 +29,7 @@ jobs:
           libdrm-dev \
           libvulkan-dev \
           glslang-tools \
-          libva-utils
+          vainfo
 
     - name: Configure CMake
       run: |
@@ -46,11 +49,22 @@ jobs:
     - name: Package Release Bundle
       run: |
         mkdir -p dist/bc250-driver/shaders
+        mkdir -p dist/bc250-driver/approach1-compute-encoder/shaders
+        
+        # Copy compiled driver library
         cp approach1-compute-encoder/build/bc250_drv_video.so dist/bc250-driver/
+        
+        # Copy compiled SPIR-V shaders & GLSL source shaders
         cp approach1-compute-encoder/build/*.spv dist/bc250-driver/shaders/ 2>/dev/null || true
+        cp approach1-compute-encoder/build/*.spv dist/bc250-driver/approach1-compute-encoder/shaders/ 2>/dev/null || true
+        cp approach1-compute-encoder/shaders/*.comp dist/bc250-driver/shaders/ 2>/dev/null || true
+        cp approach1-compute-encoder/shaders/*.comp dist/bc250-driver/approach1-compute-encoder/shaders/ 2>/dev/null || true
+        
+        # Copy installer, tools, docs, and audio fix
         cp build_and_install.sh dist/bc250-driver/
         cp -r tools dist/bc250-driver/
         cp -r audio-fix dist/bc250-driver/
+        cp -r docs dist/bc250-driver/ 2>/dev/null || true
         cp README.md dist/bc250-driver/
         cp LICENSE dist/bc250-driver/
         
