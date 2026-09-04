@@ -79,6 +79,19 @@ jobs:
         ffmpeg -v error -i "$STREAM_PATH" -f null -
         echo "✓ SUCCESS: FFmpeg verified and decoded all frames with ZERO errors!"
 
+        # Content Assertion: Decode stream to raw YUV and verify exact frame count & byte size
+        echo "Running Content Assertion: decoding stream to raw YUV420p..."
+        ffmpeg -v error -y -i "$STREAM_PATH" -f rawvideo -pix_fmt yuv420p decoded.yuv
+        DECODED_SIZE=$(wc -c < decoded.yuv)
+        EXPECTED_SIZE=$((1920 * 1080 * 3 / 2 * 30))
+        echo "Decoded raw YUV size: $DECODED_SIZE bytes (expected: $EXPECTED_SIZE bytes for 30 1080p frames)"
+        if [ "$DECODED_SIZE" -ne "$EXPECTED_SIZE" ]; then
+          echo "ERROR: Decoded size mismatch! Expected $EXPECTED_SIZE bytes, got $DECODED_SIZE"
+          exit 1
+        fi
+        rm -f decoded.yuv
+        echo "✓ CONTENT ASSERTION PASSED: All 30 frames verified with exact byte count (93,312,000 bytes)!"
+
     - name: Package Release Bundle
       run: |
         mkdir -p dist/bc250-driver/shaders

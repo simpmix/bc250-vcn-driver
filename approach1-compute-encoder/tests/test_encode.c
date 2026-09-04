@@ -32,15 +32,29 @@ int main(void) {
     FILE *f_stream = fopen("bc250_test_stream.h264", "wb");
     assert(f_stream != NULL);
 
-    gpu_image_t dummy_img;
-    memset(&dummy_img, 0, sizeof(dummy_img));
+    uint8_t *y_plane = malloc(width * height);
+    uint8_t *uv_plane = malloc(width * height / 2);
+    assert(y_plane != NULL && uv_plane != NULL);
 
     /* Encode 30 frames (1 GOP): 1 IDR frame followed by 29 P-frames */
     const int num_frames = 30;
     size_t total_bytes = 0;
 
     for (int i = 0; i < num_frames; i++) {
-        int written = h264_encoder_encode_frame(enc, NULL, dummy_img, out_buf, out_cap);
+        /* Generate synthetic animated test pattern: moving gradient bar and cross-hatch */
+        int shift = (i * 32) % (int)width;
+        for (uint32_t r = 0; r < height; r++) {
+            for (uint32_t c = 0; c < width; c++) {
+                y_plane[r * width + c] = (uint8_t)(((c + shift) * 255 / width) ^ ((r * 128) / height));
+            }
+        }
+        for (uint32_t r = 0; r < height / 2; r++) {
+            for (uint32_t c = 0; c < width; c++) {
+                uv_plane[r * width + c] = (uint8_t)(128 + ((r * 64) / (height / 2)));
+            }
+        }
+
+        int written = h264_encoder_encode_raw(enc, y_plane, width, uv_plane, width, out_buf, out_cap);
         assert(written > 0);
 
         /* Verify 4-byte start code at the beginning of each frame (AUD) */
@@ -90,6 +104,8 @@ int main(void) {
     }
 
     fclose(f_stream);
+    free(y_plane);
+    free(uv_plane);
     free(out_buf);
     h264_encoder_destroy(enc);
 

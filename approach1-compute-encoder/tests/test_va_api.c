@@ -103,15 +103,64 @@ int main(void) {
     ctx.vtable->vaUnmapBuffer(&ctx, coded_buf_id);
     printf("[PASS] Coded buffer segment initialization validated\n");
 
-    /* 8. Image transfer test (GetImage / PutImage) */
-    VAImage image;
+    /* 8. Image transfer test (GetImage / PutImage bit-exact round-trip) */
+    VAImage image1, image2;
     VAImageFormat fmt = { .fourcc = VA_FOURCC_NV12, .byte_order = VA_LSB_FIRST, .bits_per_pixel = 12 };
-    status = ctx.vtable->vaCreateImage(&ctx, &fmt, 1920, 1080, &image);
+    status = ctx.vtable->vaCreateImage(&ctx, &fmt, 1920, 1080, &image1);
+    assert(status == VA_STATUS_SUCCESS);
+    status = ctx.vtable->vaCreateImage(&ctx, &fmt, 1920, 1080, &image2);
     assert(status == VA_STATUS_SUCCESS);
 
-    status = ctx.vtable->vaPutImage(&ctx, surfaces[0], image.image_id, 0, 0, 1920, 1080, 0, 0, 1920, 1080);
+    /* Fill image1 with a deterministic pixel pattern */
+    void *img1_ptr = NULL;
+    status = ctx.vtable->vaMapBuffer(&ctx, image1.buf, &img1_ptr);
+    assert(status == VA_STATUS_SUCCESS && img1_ptr != NULL);
+    uint8_t *y1 = (uint8_t *)img1_ptr + image1.offsets[0];
+    uint8_t *uv1 = (uint8_t *)img1_ptr + image1.offsets[1];
+    for (int r = 0; r < 1080; r++) {
+        for (int c = 0; c < 1920; c++) {
+            y1[r * image1.pitches[0] + c] = (uint8_t)((r * 3 + c * 5) & 0xFF);
+        }
+    }
+    for (int r = 0; r < 540; r++) {
+        for (int c = 0; c < 1920; c++) {
+            uv1[r * image1.pitches[1] + c] = (uint8_t)((r * 7 + c * 11) & 0xFF);
+        }
+    }
+    ctx.vtable->vaUnmapBuffer(&ctx, image1.buf);
+
+    /* Upload pixel data to surface */
+    status = ctx.vtable->vaPutImage(&ctx, surfaces[0], image1.image_id, 0, 0, 1920, 1080, 0, 0, 1920, 1080);
     assert(status == VA_STATUS_SUCCESS);
-    printf("[PASS] Image transfer and surface write validated\n");
+
+    /* Download pixel data back from surface into image2 */
+    status = ctx.vtable->vaGetImage(&ctx, surfaces[0], 0, 0, 1920, 1080, image2.image_id);
+    assert(status == VA_STATUS_SUCCESS);
+
+    /* Verify bit-exact match of uploaded vs downloaded pixels */
+    void *img2_ptr = NULL;
+    status = ctx.vtable->vaMapBuffer(&ctx, image2.buf, &img2_ptr);
+    assert(status == VA_STATUS_SUCCESS && img2_ptr != NULL);
+    const uint8_t *y2 = (const uint8_t *)img2_ptr + image2.offsets[0];
+    const uint8_t *uv2 = (const uint8_t *)img2_ptr + image2.offsets[1];
+    int pixel_mismatches = 0;
+    for (int r = 0; r < 1080; r++) {
+        for (int c = 0; c < 1920; c++) {
+            if (y2[r * image2.pitches[0] + c] != (uint8_t)((r * 3 + c * 5) & 0xFF)) {
+                pixel_mismatches++;
+            }
+        }
+    }
+    for (int r = 0; r < 540; r++) {
+        for (int c = 0; c < 1920; c++) {
+            if (uv2[r * image2.pitches[1] + c] != (uint8_t)((r * 7 + c * 11) & 0xFF)) {
+                pixel_mismatches++;
+            }
+        }
+    }
+    assert(pixel_mismatches == 0 && "Pixel data mismatch in PutImage/GetImage round-trip!");
+    ctx.vtable->vaUnmapBuffer(&ctx, image2.buf);
+    printf("[PASS] Image transfer bit-exact round-trip verified (0 pixel mismatches across 3.1M pixels)\n");
 
     /* 9. Derive Image test */
     VAImage derived_img;
@@ -120,8 +169,9 @@ int main(void) {
     ctx.vtable->vaDestroyImage(&ctx, derived_img.image_id);
     printf("[PASS] Derive image and surface mapping validated\n");
 
-    /* Clean up */
-    ctx.vtable->vaDestroyImage(&ctx, image.image_id);
+    /* Clean up images */
+    ctx.vtable->vaDestroyImage(&ctx, image1.image_id);
+    ctx.vtable->vaDestroyImage(&ctx, image2.image_id);
     ctx.vtable->vaDestroyBuffer(&ctx, coded_buf_id);
     ctx.vtable->vaDestroyContext(&ctx, context_id);
     ctx.vtable->vaDestroySurfaces(&ctx, surfaces, 2);

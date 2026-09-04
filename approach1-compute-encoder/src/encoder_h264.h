@@ -60,6 +60,38 @@ void h264_encoder_force_idr(h264_encoder_t *encoder);
 void h264_encoder_set_bitrate(h264_encoder_t *encoder, uint32_t bitrate_bps);
 
 /**
+ * h264_encoder_set_gop_size - Configure keyframe (IDR) interval
+ */
+void h264_encoder_set_gop_size(h264_encoder_t *encoder, uint32_t gop_size);
+
+/**
+ * h264_encoder_set_fps - Dynamically update framerate
+ */
+void h264_encoder_set_fps(h264_encoder_t *encoder, uint32_t fps);
+
+/**
+ * h264_encoder_set_qp - Set constant/base quantization parameter (0..51)
+ */
+void h264_encoder_set_qp(h264_encoder_t *encoder, int qp);
+
+/**
+ * h264_encoder_encode_raw - Encodes a raw NV12 image frame with pattern/content analysis
+ * @encoder: Encoder context
+ * @y_plane: Host pointer to Y plane data
+ * @y_pitch: Row pitch of Y plane in bytes
+ * @uv_plane: Host pointer to interleaved UV plane data
+ * @uv_pitch: Row pitch of UV plane in bytes
+ * @output_buf: Destination buffer for NALUs
+ * @output_size: Size of output buffer
+ *
+ * Returns number of bytes written, or -1 on error.
+ */
+int h264_encoder_encode_raw(h264_encoder_t *encoder,
+                            const uint8_t *y_plane, int y_pitch,
+                            const uint8_t *uv_plane, int uv_pitch,
+                            uint8_t *output_buf, size_t output_size);
+
+/**
  * h264_encoder_destroy - Teardown and free resources
  */
 void h264_encoder_destroy(h264_encoder_t *encoder);
