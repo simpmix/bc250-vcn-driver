@@ -10,6 +10,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+static inline void bs_write_bit(bitstream_t *bs, uint32_t val) {
+    bs_write1(bs, val);
+}
+
+static inline void bs_write_bits(bitstream_t *bs, int bits, uint32_t val) {
+    bs_write_u(bs, bits, val);
+}
+
 /* H.264 Zigzag scan order for 4x4 block */
 static const int zigzag_4x4[16] = {
      0,  1,  4,  8,
@@ -323,9 +331,5 @@ int cavlc_write_chroma_dc_block(bitstream_t *bs, const int *coeffs) {
 
 void cavlc_write_slice_trailing_bits(bitstream_t *bs) {
     if (!bs) return;
-    /* rbsp_trailing_bits: 1 bit of '1', followed by zero bits until byte aligned */
-    bs_write_bit(bs, 1);
-    while ((bs->bit_pos & 7) != 0) {
-        bs_write_bit(bs, 0);
-    }
+    bs_rbsp_trailing_bits(bs);
 }

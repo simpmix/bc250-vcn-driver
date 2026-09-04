@@ -27,7 +27,14 @@ VAStatus bc250_QueryConfigProfiles(VADriverContextP ctx, VAProfile *profile_list
 
     int i = 0;
     profile_list[i++] = VAProfileH264ConstrainedBaseline;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
     profile_list[i++] = VAProfileH264Baseline;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     profile_list[i++] = VAProfileH264Main;
     profile_list[i++] = VAProfileH264High;
 
@@ -38,10 +45,18 @@ VAStatus bc250_QueryConfigProfiles(VADriverContextP ctx, VAProfile *profile_list
 VAStatus bc250_QueryConfigEntrypoints(VADriverContextP ctx, VAProfile profile, VAEntrypoint *entrypoint_list, int *num_entrypoints) {
     if (!ctx || !num_entrypoints) return VA_STATUS_ERROR_INVALID_PARAMETER;
 
-    if (profile != VAProfileH264ConstrainedBaseline &&
-        profile != VAProfileH264Baseline &&
-        profile != VAProfileH264Main &&
-        profile != VAProfileH264High) {
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    int is_supported_profile = (profile == VAProfileH264ConstrainedBaseline ||
+                                profile == VAProfileH264Baseline ||
+                                profile == VAProfileH264Main ||
+                                profile == VAProfileH264High);
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+    if (!is_supported_profile) {
         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
     }
 
