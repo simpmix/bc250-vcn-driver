@@ -126,7 +126,7 @@ size_t bs_write_sps(uint8_t *buf, size_t buf_size, const h264_sps_t *sps) {
     bs_init(&bs, rbsp, sizeof(rbsp));
     
     bs_write_u(&bs, 8, sps->profile_idc);
-    bs_write1(&bs, sps->constrained_intra_pred ? 1 : 0);
+    bs_write1(&bs, 0); // constraint_set0_flag
     bs_write1(&bs, 0); // constraint_set1_flag
     bs_write1(&bs, 0); // constraint_set2_flag
     bs_write1(&bs, 0); // constraint_set3_flag

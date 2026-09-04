@@ -65,6 +65,7 @@ static void test_emulation_prevention(void) {
 
     /* Expected: 00 00 03 01 AA (5 bytes) */
     assert(out_len == 5);
+    (void)out_len;
     assert(escaped[0] == 0x00);
     assert(escaped[1] == 0x00);
     assert(escaped[2] == 0x03);

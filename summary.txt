@@ -1,0 +1,34 @@
+Run cmake --build approach1-compute-encoder/build --parallel $(nproc)
+[  5%] Compiling compute shader color_convert.comp with glslangValidator
+[ 15%] Building C object tests/CMakeFiles/test_bitstream.dir/test_bitstream.c.o
+[ 15%] Compiling compute shader dct_transform.comp with glslangValidator
+[ 21%] Compiling compute shader deblock_filter.comp with glslangValidator
+/home/runner/work/bc250-vcn-driver/bc250-vcn-driver/approach1-compute-encoder/shaders/dct_transform.comp
+ERROR: /home/runner/work/bc250-vcn-driver/bc250-vcn-driver/approach1-compute-encoder/shaders/dct_transform.comp:25: 'input' : Reserved word. 
+ERROR: /home/runner/work/bc250-vcn-driver/bc250-vcn-driver/approach1-compute-encoder/shaders/dct_transform.comp:25: '' : compilation terminated 
+ERROR: 2 compilation errors.  No code generated.
+
+
+ERROR: Linking compute stage: Missing entry point: Each stage requires one entry point
+
+SPIR-V is not generated for failed compile or link
+gmake[2]: *** [CMakeFiles/compile_shaders.dir/build.make:82: dct_transform.comp.spv] Error 2
+gmake[2]: *** Waiting for unfinished jobs....
+[ 26%] Building C object tests/CMakeFiles/test_bitstream.dir/__/src/bitstream.c.o
+/home/runner/work/bc250-vcn-driver/bc250-vcn-driver/approach1-compute-encoder/src/bitstream.c: In function ‘bs_write_sps’:
+/home/runner/work/bc250-vcn-driver/bc250-vcn-driver/approach1-compute-encoder/src/bitstream.c:129:23: error: ‘h264_sps_t’ {aka ‘const struct h264_sps’} has no member named ‘constrained_intra_pred’
+  129 |     bs_write1(&bs, sps->constrained_intra_pred ? 1 : 0);
+      |                       ^~
+gmake[2]: *** [tests/CMakeFiles/test_bitstream.dir/build.make:93: tests/CMakeFiles/test_bitstream.dir/__/src/bitstream.c.o] Error 1
+gmake[2]: *** Waiting for unfinished jobs....
+/home/runner/work/bc250-vcn-driver/bc250-vcn-driver/approach1-compute-encoder/tests/test_bitstream.c: In function ‘test_emulation_prevention’:
+/home/runner/work/bc250-vcn-driver/bc250-vcn-driver/approach1-compute-encoder/tests/test_bitstream.c:64:12: warning: unused variable ‘out_len’ [-Wunused-variable]
+   64 |     size_t out_len = bs_rbsp_to_ebsp(escaped, sizeof(escaped), raw, sizeof(raw));
+      |            ^~~~~~~
+/home/runner/work/bc250-vcn-driver/bc250-vcn-driver/approach1-compute-encoder/shaders/color_convert.comp
+/home/runner/work/bc250-vcn-driver/bc250-vcn-driver/approach1-compute-encoder/shaders/deblock_filter.comp
+gmake[1]: *** [CMakeFiles/Makefile2:115: CMakeFiles/compile_shaders.dir/all] Error 2
+gmake[1]: *** Waiting for unfinished jobs....
+gmake[1]: *** [CMakeFiles/Makefile2:179: tests/CMakeFiles/test_bitstream.dir/all] Error 2
+gmake: *** [Makefile:136: all] Error 2
+Error: Process completed with exit code 2.
