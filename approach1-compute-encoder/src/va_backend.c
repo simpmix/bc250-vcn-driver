@@ -415,10 +415,6 @@ VAStatus bc250_RenderPicture(VADriverContextP ctx, VAContextID context, VABuffer
                         if (seq->bits_per_second > 0) {
                             h264_encoder_set_bitrate(c->h264_enc, seq->bits_per_second);
                         }
-                        if (seq->time_scale > 0 && seq->num_units_in_tick > 0) {
-                            uint32_t fps = seq->time_scale / (2 * seq->num_units_in_tick);
-                            if (fps > 0) h264_encoder_set_fps(c->h264_enc, fps);
-                        }
                     }
                 }
                 break;
@@ -448,8 +444,11 @@ VAStatus bc250_RenderPicture(VADriverContextP ctx, VAContextID context, VABuffer
                         }
                     } else if (misc->type == VAEncMiscParameterTypeFrameRate && c->h264_enc) {
                         VAEncMiscParameterFrameRate *fr = (VAEncMiscParameterFrameRate*)misc->data;
-                        if (fr->fps > 0) {
-                            h264_encoder_set_fps(c->h264_enc, fr->fps);
+                        uint32_t num = fr->framerate & 0xFFFF;
+                        uint32_t den = (fr->framerate >> 16) & 0xFFFF;
+                        if (den == 0) den = 1;
+                        if (num > 0) {
+                            h264_encoder_set_fps(c->h264_enc, num / den);
                         }
                     }
                 }
