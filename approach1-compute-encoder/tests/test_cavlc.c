@@ -25,6 +25,7 @@ static void test_zero_blocks(void) {
     bs_init(&bs, buf, sizeof(buf));
     int tc = cavlc_write_4x4_block(&bs, zero_coeffs, 0);
     assert(tc == 0);
+    (void)tc;
     bs_flush(&bs);
     assert(bs_bytes_written(&bs) == 1);
     assert((buf[0] & 0x80) == 0x80); /* First bit is 1 */
@@ -33,6 +34,7 @@ static void test_zero_blocks(void) {
     bs_init(&bs, buf, sizeof(buf));
     tc = cavlc_write_4x4_block(&bs, zero_coeffs, 2);
     assert(tc == 0);
+    (void)tc;
     bs_flush(&bs);
     assert(bs_bytes_written(&bs) == 1);
     assert((buf[0] & 0xC0) == 0xC0); /* First 2 bits are 11 */
@@ -41,6 +43,7 @@ static void test_zero_blocks(void) {
     bs_init(&bs, buf, sizeof(buf));
     tc = cavlc_write_4x4_block(&bs, zero_coeffs, 5);
     assert(tc == 0);
+    (void)tc;
     bs_flush(&bs);
     assert(bs_bytes_written(&bs) == 1);
     assert((buf[0] & 0xF0) == 0xF0); /* First 4 bits are 1111 */
@@ -49,6 +52,7 @@ static void test_zero_blocks(void) {
     bs_init(&bs, buf, sizeof(buf));
     tc = cavlc_write_4x4_block(&bs, zero_coeffs, 10);
     assert(tc == 0);
+    (void)tc;
     bs_flush(&bs);
     assert(bs_bytes_written(&bs) == 1);
     assert((buf[0] & 0xFC) == 0x00); /* First 6 bits are 000000 */
@@ -66,6 +70,7 @@ static void test_trailing_ones(void) {
     bs_init(&bs, buf, sizeof(buf));
     int tc = cavlc_write_4x4_block(&bs, coeffs, 0);
     assert(tc == 3);
+    (void)tc;
     bs_flush(&bs);
     assert(bs_bytes_written(&bs) > 0);
 
@@ -74,6 +79,7 @@ static void test_trailing_ones(void) {
     bs_init(&bs, buf, sizeof(buf));
     tc = cavlc_write_4x4_block(&bs, single_t1, 0);
     assert(tc == 1);
+    (void)tc;
     bs_flush(&bs);
     assert(bs_bytes_written(&bs) > 0);
 
@@ -90,6 +96,7 @@ static void test_levels_and_runs(void) {
     bs_init(&bs, buf, sizeof(buf));
     int tc = cavlc_write_4x4_block(&bs, coeffs, 1);
     assert(tc == 3);
+    (void)tc;
     bs_flush(&bs);
     assert(bs_bytes_written(&bs) > 0);
 
@@ -106,6 +113,7 @@ static void test_chroma_dc(void) {
     bs_init(&bs, buf, sizeof(buf));
     int tc = cavlc_write_chroma_dc_block(&bs, zero_chroma);
     assert(tc == 0);
+    (void)tc;
     bs_flush(&bs);
     assert(bs_bytes_written(&bs) == 1);
     assert((buf[0] & 0x80) == 0x80); /* 1 bit: '1' */
@@ -115,6 +123,7 @@ static void test_chroma_dc(void) {
     bs_init(&bs, buf, sizeof(buf));
     tc = cavlc_write_chroma_dc_block(&bs, nz_chroma);
     assert(tc == 2);
+    (void)tc;
     bs_flush(&bs);
     assert(bs_bytes_written(&bs) > 0);
 

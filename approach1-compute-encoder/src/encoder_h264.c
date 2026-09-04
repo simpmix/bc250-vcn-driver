@@ -163,7 +163,7 @@ void h264_encoder_set_gop_size(h264_encoder_t *encoder, uint32_t gop_size) {
 void h264_encoder_set_fps(h264_encoder_t *encoder, uint32_t fps) {
     if (encoder && fps > 0) {
         encoder->fps = fps;
-        encoder->rc.fps = (double)fps;
+        encoder->rc.framerate = (double)fps;
     }
 }
 
