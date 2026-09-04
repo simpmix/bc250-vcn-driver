@@ -11,7 +11,7 @@
 int main(void) {
     printf("=== Running BC-250 VA-API Driver Tests ===\n");
 
-    VADriverContext ctx;
+    struct VADriverContext ctx;
     struct VADriverVTable vtable;
     memset(&ctx, 0, sizeof(ctx));
     memset(&vtable, 0, sizeof(vtable));
