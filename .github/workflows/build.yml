@@ -28,6 +28,7 @@ jobs:
           libva-dev \
           libdrm-dev \
           libvulkan-dev \
+          mesa-vulkan-drivers \
           glslang-tools \
           vainfo \
           ffmpeg

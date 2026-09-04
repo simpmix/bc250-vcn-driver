@@ -113,6 +113,13 @@ int main(void) {
     assert(status == VA_STATUS_SUCCESS);
     printf("[PASS] Image transfer and surface write validated\n");
 
+    /* 9. Derive Image test */
+    VAImage derived_img;
+    status = ctx.vtable->vaDeriveImage(&ctx, surfaces[0], &derived_img);
+    assert(status == VA_STATUS_SUCCESS);
+    ctx.vtable->vaDestroyImage(&ctx, derived_img.image_id);
+    printf("[PASS] Derive image and surface mapping validated\n");
+
     /* Clean up */
     ctx.vtable->vaDestroyImage(&ctx, image.image_id);
     ctx.vtable->vaDestroyBuffer(&ctx, coded_buf_id);

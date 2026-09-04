@@ -96,6 +96,8 @@ struct bc250_buffer {
     unsigned int num_elements;
     void *data;
     int mapped;
+    int is_derived;
+    VkDeviceMemory gpu_mem;
 };
 
 struct bc250_image {

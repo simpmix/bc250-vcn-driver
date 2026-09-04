@@ -346,7 +346,14 @@ VAStatus bc250_UnmapBuffer(VADriverContextP ctx, VABufferID buf_id) {
 VAStatus bc250_DestroyBuffer(VADriverContextP ctx, VABufferID buffer_id) {
     bc250_driver_data *data = get_driver_data(ctx);
     if (!data || !VALID_ID(buffer_id, MAX_BUFFERS) || !data->buffers[buffer_id].allocated) return VA_STATUS_ERROR_INVALID_BUFFER;
-    free(data->buffers[buffer_id].data);
+    if (data->buffers[buffer_id].is_derived) {
+        if (data->buffers[buffer_id].gpu_mem) {
+            vkUnmapMemory(data->gpu.device, data->buffers[buffer_id].gpu_mem);
+        }
+    } else {
+        free(data->buffers[buffer_id].data);
+    }
+    data->buffers[buffer_id].data = NULL;
     data->buffers[buffer_id].allocated = 0;
     return VA_STATUS_SUCCESS;
 }
@@ -572,8 +579,11 @@ VAStatus bc250_DeriveImage(VADriverContextP ctx, VASurfaceID surface, VAImage *i
     if (buf && surf->memory.memory) {
         void *mapped = NULL;
         if (vkMapMemory(data->gpu.device, surf->memory.memory, 0, surf->memory.size, 0, &mapped) == VK_SUCCESS) {
+            if (buf->data) free(buf->data);
             buf->data = mapped;
-            buf->is_mapped = 1;
+            buf->mapped = 1;
+            buf->is_derived = 1;
+            buf->gpu_mem = surf->memory.memory;
         }
     }
     return VA_STATUS_SUCCESS;
