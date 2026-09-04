@@ -106,14 +106,30 @@ done
 
 cd "$SCRIPT_DIR"
 
+# Configure system-wide environment for boot persistence
+if [ -d "/etc/environment.d" ]; then
+    printf "LIBVA_DRIVER_NAME=bc250\nBC250_FAST_MODE=1\n" | $SUDO tee /etc/environment.d/99-bc250.conf > /dev/null 2>&1 || true
+    echo -e "  -> Configured system-wide environment in /etc/environment.d/99-bc250.conf"
+elif [ -f "/etc/environment" ]; then
+    if ! grep -q "LIBVA_DRIVER_NAME=bc250" /etc/environment 2>/dev/null; then
+        printf "LIBVA_DRIVER_NAME=bc250\nBC250_FAST_MODE=1\n" | $SUDO tee -a /etc/environment > /dev/null 2>&1 || true
+        echo -e "  -> Configured system-wide environment in /etc/environment"
+    fi
+fi
+
+# Optional: Install Audio Fix via DKMS if available
+if [ -d "$SCRIPT_DIR/audio-fix" ] && command -v dkms &> /dev/null; then
+    echo -e "\n${BLUE}Configuring Audio Fix with DKMS...${NC}"
+    (cd "$SCRIPT_DIR/audio-fix" && $SUDO ./install_dkms.sh) || echo -e "${YELLOW}DKMS setup skipped.${NC}"
+fi
+
 # Configuration summary
 echo -e "\n${GREEN}======================================================${NC}"
 echo -e "${GREEN}${BOLD}   Installation Completed Successfully!              ${NC}"
 echo -e "${GREEN}======================================================${NC}"
-echo -e "\nTo activate the driver in your current shell:"
+echo -e "\nTo activate the driver in your current shell session:"
 echo -e "  ${YELLOW}export LIBVA_DRIVER_NAME=bc250${NC}"
-echo -e "\n${BOLD}Ultra-Low Latency Gaming Mode (Recommended for Sunshine / Moonlight):${NC}"
-echo -e "  ${GREEN}export BC250_FAST_MODE=1${NC}"
-echo -e "  (Uses 2:1 subsampled motion estimation and bypasses deblocking, keeping GPU load under 3-5%!)"
-echo -e "\nTo verify driver capabilities:"
+echo -e "  ${YELLOW}export BC250_FAST_MODE=1${NC}  (keeps GPU overhead under 3-5% for 60 FPS gaming!)"
+echo -e "\nTo verify driver capabilities and run encode benchmark:"
+echo -e "  ${GREEN}./tools/bc250_diagnose.sh${NC}"
 echo -e "  ${GREEN}LIBVA_DRIVER_NAME=bc250 vainfo${NC}"

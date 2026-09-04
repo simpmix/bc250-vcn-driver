@@ -11,7 +11,17 @@ We provide two ways to fix this:
 1. **Loadable Kernel Module (`bc250_audio_fix.ko`)**: Dynamically patches the audio configuration registers. Safe, doesn't require recompiling the kernel.
 2. **Mainline Kernel Patches (`patches/`)**: Direct patches for the `amdgpu` driver. Requires recompiling your kernel but provides a permanent, native fix.
 
-## Building the Module
+## Automated Installation via DKMS (Recommended)
+This ensures the audio fix automatically survives Linux kernel updates:
+```bash
+sudo ./install_dkms.sh
+```
+To uninstall:
+```bash
+sudo ./uninstall_dkms.sh
+```
+
+## Manual Module Build
 ```bash
 make
 sudo insmod bc250_audio_fix.ko sample_rate=48000 channels=2
