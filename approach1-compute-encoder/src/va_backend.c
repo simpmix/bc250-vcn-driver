@@ -703,9 +703,6 @@ VAStatus bc250_Initialize(VADriverContextP ctx, int *major_version, int *minor_v
     ctx->vtable->vaDeriveImage = bc250_DeriveImage;
     ctx->vtable->vaGetImage = bc250_GetImage;
     ctx->vtable->vaPutImage = bc250_PutImage;
-    ctx->vtable->vaQueryVideoProcFilters = bc250_QueryVideoProcFilters;
-    ctx->vtable->vaQueryVideoProcFilterCaps = bc250_QueryVideoProcFilterCaps;
-    ctx->vtable->vaQueryVideoProcPipelineCaps = bc250_QueryVideoProcPipelineCaps;
 
     if (major_version) *major_version = VA_MAJOR_VERSION;
     if (minor_version) *minor_version = VA_MINOR_VERSION;

@@ -26,7 +26,7 @@
 #define MAX_BUFFERS 4096
 #define MAX_IMAGES 256
 
-#define VALID_ID(id, max) ((id) >= 0 && (id) < (max))
+#define VALID_ID(id, max) ((unsigned int)(id) < (unsigned int)(max))
 #define GET_OBJ(pool, id) (&pool[id])
 
 typedef struct bc250_surface bc250_surface;

@@ -711,6 +711,7 @@ int gpu_compute_upload_nv12(gpu_context_t *ctx, gpu_image_t *image,
                            const uint8_t *y_plane, int y_pitch,
                            const uint8_t *uv_plane, int uv_pitch,
                            int width, int height) {
+    (void)y_plane; (void)y_pitch; (void)uv_plane; (void)uv_pitch; (void)width; (void)height;
     VkImageSubresource subresource_y = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0 };
     VkSubresourceLayout layout_y;
     vkGetImageSubresourceLayout(ctx->device, image->y_plane, &subresource_y, &layout_y);
@@ -718,6 +719,7 @@ int gpu_compute_upload_nv12(gpu_context_t *ctx, gpu_image_t *image,
     VkMemoryRequirements y_req;
     vkGetImageMemoryRequirements(ctx->device, image->y_plane, &y_req);
     VkDeviceSize uv_offset = (y_req.size + y_req.alignment - 1) & ~(y_req.alignment - 1);
+    (void)uv_offset;
 
     VkImageSubresource subresource_uv = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0 };
     VkSubresourceLayout layout_uv;
