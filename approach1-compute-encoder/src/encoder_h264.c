@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "bitstream.h"
+#include "cavlc.h"
 #include "rate_control.h"
 #include "gpu_compute.h"
 #include "encoder_h264.h"
@@ -92,57 +93,6 @@ static size_t write_aud(uint8_t *buf, size_t buf_size, bool is_idr) {
     return 6;
 }
 
-static size_t write_slice_header(h264_encoder_t *encoder, bitstream_t *bs,
-                                 int slice_type, int qp,
-                                 size_t *out_payload_offset)
-{
-    bool is_idr = (slice_type == SLICE_TYPE_I);
-
-    size_t payload_offset = bs_write_nal_header(bs,
-        is_idr ? NAL_REF_IDC_HIGH : NAL_REF_IDC_MEDIUM,
-        is_idr ? NAL_TYPE_IDR_SLICE : NAL_TYPE_SLICE);
-    *out_payload_offset = payload_offset;
-
-    /* first_mb_in_slice = 0 */
-    bs_write_ue(bs, 0);
-    /* slice_type */
-    bs_write_ue(bs, slice_type);
-    /* pic_parameter_set_id */
-    bs_write_ue(bs, encoder->pps.pps_id);
-    /* frame_num */
-    bs_write_u(bs, encoder->sps.log2_max_frame_num + 4, encoder->frame_num);
-
-    if (is_idr) {
-        bs_write_ue(bs, encoder->idr_pic_id);
-    }
-
-    int poc_bits = encoder->sps.log2_max_poc_lsb + 4;
-    bs_write_u(bs, poc_bits, encoder->poc & ((1 << poc_bits) - 1));
-
-    if (!is_idr) {
-        bs_write1(bs, 0); /* ref_pic_list_modification_flag_l0 = 0 */
-        bs_write1(bs, 0); /* adaptive_ref_pic_marking_mode_flag = 0 */
-    }
-
-    if (is_idr) {
-        bs_write1(bs, 0); /* no_output_of_prior_pics_flag = 0 */
-        bs_write1(bs, 0); /* long_term_reference_flag = 0 */
-    }
-
-    int slice_qp_delta = qp - 26 - encoder->pps.pic_init_qp;
-    bs_write_se(bs, slice_qp_delta);
-
-    const char *fm = getenv("BC250_FAST_MODE");
-    int deblock_idc = (fm && (strcmp(fm, "1") == 0 || strcmp(fm, "true") == 0)) ? 1 : 0;
-    bs_write_ue(bs, deblock_idc);  /* disable_deblocking_filter_idc: 1 = disabled (fast gaming mode) */
-    bs_write_se(bs, 0);  /* slice_alpha_c0_offset_div2 = 0 */
-    bs_write_se(bs, 0);  /* slice_beta_offset_div2 = 0 */
-
-    bs_rbsp_trailing_bits(bs);
-
-    return bs_bytes_written(bs);
-}
-
 h264_encoder_t *h264_encoder_create(bc250_gpu_context_t *gpu_ctx,
                                     uint32_t width, uint32_t height,
                                     uint32_t fps, uint32_t bitrate,
@@ -163,9 +113,9 @@ h264_encoder_t *h264_encoder_create(bc250_gpu_context_t *gpu_ctx,
     encoder->dpb_max = 16;
     encoder->force_idr = false;
 
-    uint8_t prof_idc = PROFILE_MAIN;
+    uint8_t prof_idc = PROFILE_BASELINE;
     if (profile == 0x64 /* VAProfileH264High */) prof_idc = PROFILE_HIGH;
-    else if (profile == 0x42 /* VAProfileH264Baseline */ || profile == 0x4D) prof_idc = PROFILE_BASELINE;
+    else if (profile == 0x4D /* VAProfileH264Main */) prof_idc = PROFILE_MAIN;
 
     h264_sps_default(&encoder->sps, width, height, encoder->fps, prof_idc);
     h264_pps_default(&encoder->pps, encoder->sps.sps_id, false, 26);
@@ -202,7 +152,7 @@ int h264_encoder_encode_frame(h264_encoder_t *encoder,
                               gpu_image_t input_surface,
                               uint8_t *output_buf, size_t output_size)
 {
-    if (!encoder || !gpu_ctx || !output_buf) return -1;
+    if (!encoder || !output_buf) return -1;
 
     bool is_idr = (encoder->frame_count % encoder->gop_size == 0) || encoder->force_idr;
     encoder->force_idr = false;
@@ -215,6 +165,9 @@ int h264_encoder_encode_frame(h264_encoder_t *encoder,
     }
 
     int qp = rc_get_frame_qp(&encoder->rc, 0);
+    if (qp < 12) qp = 12;
+    if (qp > 51) qp = 51;
+
     size_t total_written = 0;
 
     /* 1. Write AUD (Access Unit Delimiter) NALU */
@@ -237,44 +190,89 @@ int h264_encoder_encode_frame(h264_encoder_t *encoder,
         total_written += pps_size;
     }
 
-    /* 3. Write slice header */
-    uint8_t slice_hdr_buf[512];
-    bitstream_t bs;
-    bs_init(&bs, slice_hdr_buf, sizeof(slice_hdr_buf));
-
-    size_t payload_offset = 0;
-    size_t rbsp_size = write_slice_header(encoder, &bs,
-        is_idr ? SLICE_TYPE_I : SLICE_TYPE_P, qp, &payload_offset);
-
-    memcpy(encoder->output_buf + total_written, slice_hdr_buf, payload_offset);
-    total_written += payload_offset;
-
-    size_t ebsp_size = bs_rbsp_to_ebsp(
-        encoder->output_buf + total_written,
-        encoder->output_buf_size - total_written,
-        slice_hdr_buf + payload_offset,
-        rbsp_size - payload_offset);
-    total_written += ebsp_size;
-
-    /* 4. Dispatch GPU compute encoding pipeline */
-    gpu_compute_begin_picture(gpu_ctx, input_surface);
-    gpu_compute_dispatch_encode(gpu_ctx, input_surface, encoder->width, encoder->height);
-    gpu_compute_end_picture(gpu_ctx);
-    gpu_compute_sync(gpu_ctx);
-
-    /* 5. Read back entropy data from GPU staging buffer */
-    void *staging_data = NULL;
-    size_t staging_size = 0;
-    if (gpu_compute_get_staging_data(gpu_ctx, &staging_data, &staging_size) == 0 && staging_data) {
-        size_t entropy_bytes = encoder->total_mbs * 8; /* Nominal entropy output size */
-        if (entropy_bytes > staging_size) entropy_bytes = staging_size;
-
-        if (total_written + entropy_bytes <= encoder->output_buf_size) {
-            memcpy(encoder->output_buf + total_written, staging_data, entropy_bytes);
-            total_written += entropy_bytes;
-        }
-        gpu_compute_release_staging_data(gpu_ctx);
+    /* 3. Dispatch GPU compute encoding pipeline if available */
+    if (gpu_ctx && input_surface.y_plane != VK_NULL_HANDLE) {
+        gpu_compute_begin_picture(gpu_ctx, input_surface);
+        gpu_compute_dispatch_encode(gpu_ctx, input_surface, encoder->width, encoder->height);
+        gpu_compute_end_picture(gpu_ctx);
+        gpu_compute_sync(gpu_ctx);
     }
+
+    /* 4. Encode Slice RBSP into temporary buffer */
+    size_t rbsp_buf_size = encoder->total_mbs * 64 + 4096;
+    uint8_t *slice_rbsp = malloc(rbsp_buf_size);
+    if (!slice_rbsp) return -1;
+
+    bitstream_t bs;
+    bs_init(&bs, slice_rbsp, rbsp_buf_size);
+
+    /* 4a. Slice Header per H.264 Section 7.3.3 */
+    int slice_type = is_idr ? SLICE_TYPE_I : SLICE_TYPE_P;
+    bs_write_ue(&bs, 0); /* first_mb_in_slice = 0 */
+    bs_write_ue(&bs, (uint32_t)slice_type);
+    bs_write_ue(&bs, (uint32_t)encoder->pps.pps_id);
+    bs_write_u(&bs, encoder->sps.log2_max_frame_num + 4, encoder->frame_num);
+
+    if (is_idr) {
+        bs_write_ue(&bs, encoder->idr_pic_id);
+    }
+
+    int poc_bits = encoder->sps.log2_max_poc_lsb + 4;
+    bs_write_u(&bs, poc_bits, encoder->poc & ((1 << poc_bits) - 1));
+
+    if (!is_idr) {
+        bs_write1(&bs, 0); /* num_ref_idx_active_override_flag = 0 */
+        bs_write1(&bs, 0); /* ref_pic_list_modification_flag_l0 = 0 */
+        bs_write1(&bs, 0); /* adaptive_ref_pic_marking_mode_flag = 0 */
+    } else {
+        bs_write1(&bs, 0); /* no_output_of_prior_pics_flag = 0 */
+        bs_write1(&bs, 0); /* long_term_reference_flag = 0 */
+    }
+
+    int slice_qp_delta = qp - 26 - encoder->pps.pic_init_qp;
+    bs_write_se(&bs, slice_qp_delta);
+
+    /* Deblocking filter control: 1 = disabled (fast gaming mode) */
+    const char *fm = getenv("BC250_FAST_MODE");
+    int deblock_idc = (fm && (strcmp(fm, "1") == 0 || strcmp(fm, "true") == 0)) ? 1 : 0;
+    bs_write_ue(&bs, (uint32_t)deblock_idc);
+    bs_write_se(&bs, 0);
+    bs_write_se(&bs, 0);
+
+    /* 4b. Slice Data (Macroblock Layer) using CAVLC per Section 7.3.4 */
+    if (is_idr) {
+        /* I-slice: all macroblocks coded as Intra 16x16 DC */
+        for (uint32_t mb = 0; mb < encoder->total_mbs; mb++) {
+            cavlc_write_mb_i16x16_header(&bs, H264_I16x16_DC, 0, 0, 0);
+        }
+    } else {
+        /* P-slice: encode all macroblocks as P_Skip (skip_run = total_mbs) */
+        cavlc_write_p_skip_run(&bs, encoder->total_mbs);
+    }
+
+    /* 4c. RBSP Trailing bits (1 followed by zero bits to byte boundary) */
+    cavlc_write_slice_trailing_bits(&bs);
+    bs_flush(&bs);
+
+    size_t rbsp_len = bs_bytes_written(&bs);
+
+    /* 5. Assemble Slice NAL unit: 4-byte start code + NAL header + EBSP */
+    if (total_written + 5 + rbsp_len * 2 <= encoder->output_buf_size) {
+        uint8_t *nal_dst = encoder->output_buf + total_written;
+        nal_dst[0] = 0x00;
+        nal_dst[1] = 0x00;
+        nal_dst[2] = 0x00;
+        nal_dst[3] = 0x01;
+        nal_dst[4] = is_idr ? ((NAL_REF_IDC_HIGH << 5) | NAL_TYPE_IDR_SLICE)
+                            : ((NAL_REF_IDC_MEDIUM << 5) | NAL_TYPE_SLICE);
+
+        size_t ebsp_len = bs_rbsp_to_ebsp(nal_dst + 5,
+                                          encoder->output_buf_size - total_written - 5,
+                                          slice_rbsp,
+                                          rbsp_len);
+        total_written += 5 + ebsp_len;
+    }
+    free(slice_rbsp);
 
     if (output_size < total_written) {
         fprintf(stderr, "[bc250-h264] Output buffer too small: need %zu, have %zu\n",

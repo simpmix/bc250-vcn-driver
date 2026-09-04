@@ -66,6 +66,7 @@ set(SOURCES
     src/va_backend.c
     src/gpu_compute.c
     src/bitstream.c
+    src/cavlc.c
     src/rate_control.c
     src/encoder_h264.c
     src/encoder_h265.c

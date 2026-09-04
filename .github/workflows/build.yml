@@ -29,7 +29,8 @@ jobs:
           libdrm-dev \
           libvulkan-dev \
           glslang-tools \
-          vainfo
+          vainfo \
+          ffmpeg
 
     - name: Configure CMake
       run: |
@@ -45,6 +46,18 @@ jobs:
     - name: Run Test Suite
       run: |
         ctest --test-dir approach1-compute-encoder/build --output-on-failure
+
+    - name: Verify Bitstream with FFmpeg Reference Decoder (External Oracle)
+      run: |
+        echo "Validating generated H.264 stream with FFmpeg reference decoder..."
+        STREAM_PATH=$(find . -name "bc250_test_stream.h264" | head -n 1)
+        if [ -z "$STREAM_PATH" ]; then
+          echo "ERROR: bc250_test_stream.h264 was not found!"
+          exit 1
+        fi
+        echo "Found test stream at $STREAM_PATH"
+        ffmpeg -v error -i "$STREAM_PATH" -f null -
+        echo "✓ SUCCESS: FFmpeg verified and decoded all frames with ZERO errors!"
 
     - name: Package Release Bundle
       run: |

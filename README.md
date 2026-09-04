@@ -75,7 +75,7 @@ To test with `vainfo`:
 export LIBVA_DRIVER_NAME=bc250
 vainfo
 ```
-You will see `VAProfileH264Main`, `VAProfileH264High`, and `VAProfileHEVCMain` listed with `VAEntrypointEncSlice` support!
+You will see `VAProfileH264ConstrainedBaseline`, `VAProfileH264Baseline`, `VAProfileH264Main`, and `VAProfileH264High` listed with `VAEntrypointEncSlice` support!
 
 ---
 

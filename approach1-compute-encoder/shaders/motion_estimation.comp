@@ -139,9 +139,11 @@ void main() {
             barrier();
             if (local_id < 2) thread_sad[local_id] += thread_sad[local_id + 2];
             barrier();
+            if (local_id == 0) thread_sad[0] += thread_sad[1];
+            barrier();
 
             if (local_id == 0) {
-                uint cand_sad = thread_sad[0] + thread_sad[1];
+                uint cand_sad = thread_sad[0];
                 uint cost = cand_sad + pcs.lambda_motion * uint(abs(test_mv.x) + abs(test_mv.y));
                 if (cost < best_cost) {
                     best_cost = cost;

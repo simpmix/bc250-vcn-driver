@@ -99,6 +99,7 @@ typedef struct bc250_gpu_context {
     /* Reconstructed frame for DPB */
     gpu_image_t recon_image;
     gpu_memory_t recon_memory;
+    bool has_recon_frame;
 
     /* Double-buffering for pipeline overlap */
     VkCommandBuffer cmd_bufs[2];
@@ -130,12 +131,12 @@ void gpu_compute_terminate(gpu_context_t *ctx);
 int gpu_compute_create_image(gpu_context_t *ctx, int width, int height, int format, gpu_image_t *image, gpu_memory_t *memory);
 void gpu_compute_destroy_image(gpu_context_t *ctx, gpu_image_t image, gpu_memory_t memory);
 
-int gpu_compute_upload_nv12(gpu_context_t *ctx, gpu_image_t *image,
+int gpu_compute_upload_nv12(gpu_context_t *ctx, gpu_image_t *image, gpu_memory_t memory,
                            const uint8_t *y_plane, int y_pitch,
                            const uint8_t *uv_plane, int uv_pitch,
                            int width, int height);
 
-int gpu_compute_download_nv12(gpu_context_t *ctx, gpu_image_t *image,
+int gpu_compute_download_nv12(gpu_context_t *ctx, gpu_image_t *image, gpu_memory_t memory,
                              uint8_t *y_plane, int y_pitch,
                              uint8_t *uv_plane, int uv_pitch,
                              int width, int height);

@@ -128,12 +128,20 @@ static int allocate_encoding_buffers(gpu_context_t *ctx, uint32_t width, uint32_
         ctx->entropy_buffer = VK_NULL_HANDLE;
     }
     for (int i = 0; i < 2; i++) {
+        if (ctx->staging_mapped[i]) {
+            vkUnmapMemory(ctx->device, ctx->staging_memories[i]);
+            ctx->staging_mapped[i] = NULL;
+        }
         if (ctx->staging_buffers[i]) {
             vkDestroyBuffer(ctx->device, ctx->staging_buffers[i], NULL);
             vkFreeMemory(ctx->device, ctx->staging_memories[i], NULL);
             ctx->staging_buffers[i] = VK_NULL_HANDLE;
+            ctx->staging_memories[i] = VK_NULL_HANDLE;
         }
     }
+
+    ctx->frame_width = width;
+    ctx->frame_height = height;
 
     uint32_t width_in_mbs = (width + 15) / 16;
     uint32_t height_in_mbs = (height + 15) / 16;
@@ -623,6 +631,11 @@ void bc250_gpu_destroy(bc250_gpu_context_t *ctx) {
         }
     }
 
+    if (ctx->recon_image.y_plane) {
+        gpu_compute_destroy_image(ctx, ctx->recon_image, ctx->recon_memory);
+        ctx->recon_image.y_plane = VK_NULL_HANDLE;
+    }
+
     if (ctx->timeline_sem) vkDestroySemaphore(ctx->device, ctx->timeline_sem, NULL);
     if (ctx->fences[0]) vkDestroyFence(ctx->device, ctx->fences[0], NULL);
     if (ctx->fences[1]) vkDestroyFence(ctx->device, ctx->fences[1], NULL);
@@ -668,15 +681,19 @@ int gpu_compute_create_image(gpu_context_t *ctx, int width, int height, int form
     vkGetImageMemoryRequirements(ctx->device, image->y_plane, &y_req);
     vkGetImageMemoryRequirements(ctx->device, image->uv_plane, &uv_req);
 
-    VkDeviceSize uv_offset = (y_req.size + y_req.alignment - 1) & ~(y_req.alignment - 1);
+    VkDeviceSize align = uv_req.alignment > y_req.alignment ? uv_req.alignment : y_req.alignment;
+    VkDeviceSize uv_offset = (y_req.size + align - 1) & ~(align - 1);
     VkDeviceSize total_size = uv_offset + uv_req.size;
 
     memory->size = total_size;
 
+    uint32_t mem_bits = y_req.memoryTypeBits & uv_req.memoryTypeBits;
+    if (mem_bits == 0) mem_bits = y_req.memoryTypeBits | uv_req.memoryTypeBits;
+
     VkMemoryAllocateInfo alloc_info = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = total_size,
-        .memoryTypeIndex = find_memory_type(ctx->physical_device, y_req.memoryTypeBits | uv_req.memoryTypeBits,
+        .memoryTypeIndex = find_memory_type(ctx->physical_device, mem_bits,
                                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
     };
     VK_CHECK(vkAllocateMemory(ctx->device, &alloc_info, NULL, &memory->memory));
@@ -707,34 +724,113 @@ void gpu_compute_destroy_image(gpu_context_t *ctx, gpu_image_t image, gpu_memory
     if (memory.memory) vkFreeMemory(ctx->device, memory.memory, NULL);
 }
 
-int gpu_compute_upload_nv12(gpu_context_t *ctx, gpu_image_t *image,
+int gpu_compute_upload_nv12(gpu_context_t *ctx, gpu_image_t *image, gpu_memory_t memory,
                            const uint8_t *y_plane, int y_pitch,
                            const uint8_t *uv_plane, int uv_pitch,
                            int width, int height) {
-    (void)y_plane; (void)y_pitch; (void)uv_plane; (void)uv_pitch; (void)width; (void)height;
+    if (!ctx || !image || !memory.memory || !y_plane || !uv_plane) return -1;
+
     VkImageSubresource subresource_y = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0 };
     VkSubresourceLayout layout_y;
     vkGetImageSubresourceLayout(ctx->device, image->y_plane, &subresource_y, &layout_y);
 
-    VkMemoryRequirements y_req;
+    VkMemoryRequirements y_req, uv_req;
     vkGetImageMemoryRequirements(ctx->device, image->y_plane, &y_req);
-    VkDeviceSize uv_offset = (y_req.size + y_req.alignment - 1) & ~(y_req.alignment - 1);
-    (void)uv_offset;
+    vkGetImageMemoryRequirements(ctx->device, image->uv_plane, &uv_req);
+    VkDeviceSize align = uv_req.alignment > y_req.alignment ? uv_req.alignment : y_req.alignment;
+    VkDeviceSize uv_offset = (y_req.size + align - 1) & ~(align - 1);
 
     VkImageSubresource subresource_uv = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0 };
     VkSubresourceLayout layout_uv;
     vkGetImageSubresourceLayout(ctx->device, image->uv_plane, &subresource_uv, &layout_uv);
 
-    /* Note: If memory is host-visible, we can write directly */
+    uint8_t *mapped = NULL;
+    if (vkMapMemory(ctx->device, memory.memory, 0, memory.size, 0, (void **)&mapped) != VK_SUCCESS) {
+        return -1;
+    }
+
+    uint8_t *dst_y = mapped + layout_y.offset;
+    for (int r = 0; r < height; r++) {
+        memcpy(dst_y + (size_t)r * layout_y.rowPitch, y_plane + (size_t)r * y_pitch, width);
+    }
+
+    uint8_t *dst_uv = mapped + uv_offset + layout_uv.offset;
+    for (int r = 0; r < height / 2; r++) {
+        memcpy(dst_uv + (size_t)r * layout_uv.rowPitch, uv_plane + (size_t)r * uv_pitch, width);
+    }
+
+    vkUnmapMemory(ctx->device, memory.memory);
     return 0;
 }
 
-int gpu_compute_download_nv12(gpu_context_t *ctx, gpu_image_t *image,
+int gpu_compute_download_nv12(gpu_context_t *ctx, gpu_image_t *image, gpu_memory_t memory,
                              uint8_t *y_plane, int y_pitch,
                              uint8_t *uv_plane, int uv_pitch,
                              int width, int height) {
-    (void)ctx; (void)image; (void)y_plane; (void)y_pitch; (void)uv_plane; (void)uv_pitch; (void)width; (void)height;
+    if (!ctx || !image || !memory.memory || !y_plane || !uv_plane) return -1;
+
+    VkImageSubresource subresource_y = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0 };
+    VkSubresourceLayout layout_y;
+    vkGetImageSubresourceLayout(ctx->device, image->y_plane, &subresource_y, &layout_y);
+
+    VkMemoryRequirements y_req, uv_req;
+    vkGetImageMemoryRequirements(ctx->device, image->y_plane, &y_req);
+    vkGetImageMemoryRequirements(ctx->device, image->uv_plane, &uv_req);
+    VkDeviceSize align = uv_req.alignment > y_req.alignment ? uv_req.alignment : y_req.alignment;
+    VkDeviceSize uv_offset = (y_req.size + align - 1) & ~(align - 1);
+
+    VkImageSubresource subresource_uv = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0 };
+    VkSubresourceLayout layout_uv;
+    vkGetImageSubresourceLayout(ctx->device, image->uv_plane, &subresource_uv, &layout_uv);
+
+    uint8_t *mapped = NULL;
+    if (vkMapMemory(ctx->device, memory.memory, 0, memory.size, 0, (void **)&mapped) != VK_SUCCESS) {
+        return -1;
+    }
+
+    const uint8_t *src_y = mapped + layout_y.offset;
+    for (int r = 0; r < height; r++) {
+        memcpy(y_plane + (size_t)r * y_pitch, src_y + (size_t)r * layout_y.rowPitch, width);
+    }
+
+    const uint8_t *src_uv = mapped + uv_offset + layout_uv.offset;
+    for (int r = 0; r < height / 2; r++) {
+        memcpy(uv_plane + (size_t)r * uv_pitch, src_uv + (size_t)r * layout_uv.rowPitch, width);
+    }
+
+    vkUnmapMemory(ctx->device, memory.memory);
     return 0;
+}
+
+static void transition_image_layout(VkCommandBuffer cmd_buf, VkImage image,
+                                    VkImageLayout old_layout, VkImageLayout new_layout) {
+    if (!image) return;
+    VkImageMemoryBarrier barrier = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .oldLayout = old_layout,
+        .newLayout = new_layout,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = image,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+
+    if (old_layout == VK_IMAGE_LAYOUT_PREINITIALIZED || old_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+        barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    } else {
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    }
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(cmd_buf, src_stage, dst_stage, 0, 0, NULL, 0, NULL, 1, &barrier);
 }
 
 static void insert_compute_barrier(VkCommandBuffer cmd_buf) {
@@ -767,8 +863,15 @@ int gpu_compute_dispatch_encode(gpu_context_t *ctx, gpu_image_t render_target, i
     /* Ensure pipeline buffers are allocated for current dimensions */
     if (ctx->staging_buffers[0] == VK_NULL_HANDLE || ctx->frame_width != (uint32_t)width || ctx->frame_height != (uint32_t)height) {
         allocate_encoding_buffers(ctx, (uint32_t)width, (uint32_t)height);
-        ctx->frame_width = (uint32_t)width;
-        ctx->frame_height = (uint32_t)height;
+    }
+
+    /* Ensure reconstructed frame buffer is allocated for DPB / reference */
+    if (ctx->recon_image.y_plane == VK_NULL_HANDLE || ctx->recon_image.width != (uint32_t)width || ctx->recon_image.height != (uint32_t)height) {
+        if (ctx->recon_image.y_plane != VK_NULL_HANDLE) {
+            gpu_compute_destroy_image(ctx, ctx->recon_image, ctx->recon_memory);
+        }
+        gpu_compute_create_image(ctx, width, height, 0, &ctx->recon_image, &ctx->recon_memory);
+        ctx->has_recon_frame = false;
     }
 
     VkCommandBuffer cmd_buf = ctx->cmd_bufs[ctx->current_buf];
@@ -776,21 +879,28 @@ int gpu_compute_dispatch_encode(gpu_context_t *ctx, gpu_image_t render_target, i
     uint32_t height_mbs = (height + 15) / 16;
     uint32_t pc[8] = { (uint32_t)width, (uint32_t)height, width_mbs, height_mbs, 26, 0, 0, 5 };
 
-    /* Update image descriptors to point to the current surface */
+    /* Transition image layout to GENERAL for compute storage access */
+    if (render_target.y_plane) {
+        transition_image_layout(cmd_buf, render_target.y_plane, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    }
+    if (render_target.uv_plane) {
+        transition_image_layout(cmd_buf, render_target.uv_plane, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    }
+
+    /* Reference image for ME: use recon frame if available, otherwise self */
+    VkImageView ref_view = render_target.y_view;
+    if (ctx->has_recon_frame && ctx->recon_image.y_view != VK_NULL_HANDLE) {
+        ref_view = ctx->recon_image.y_view;
+    }
+
+    /* Update image descriptors */
     if (render_target.y_view && render_target.uv_view) {
         update_storage_image_descriptor(ctx->device, ctx->me_desc_set, 0, render_target.y_view);
-        update_storage_image_descriptor(ctx->device, ctx->me_desc_set, 1, render_target.y_view); /* self or ref */
+        update_storage_image_descriptor(ctx->device, ctx->me_desc_set, 1, ref_view);
         update_storage_image_descriptor(ctx->device, ctx->deblock_desc_set, 0, render_target.y_view);
     }
 
-    /* Stage 1: Color Convert */
-    if (ctx->color_convert_pipeline) {
-        vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, ctx->color_convert_pipeline);
-        vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, ctx->color_convert_layout, 0, 1, &ctx->cc_desc_set, 0, NULL);
-        vkCmdPushConstants(cmd_buf, ctx->color_convert_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
-        vkCmdDispatch(cmd_buf, width_mbs, height_mbs, 1);
-        insert_compute_barrier(cmd_buf);
-    }
+    /* Stage 1: Color Convert (Skipped: inputs in VA-API are already NV12) */
 
     /* Stage 2: Motion Estimation */
     if (ctx->motion_est_pipeline) {
@@ -845,6 +955,18 @@ int gpu_compute_dispatch_encode(gpu_context_t *ctx, gpu_image_t render_target, i
     if (copy_size > ctx->staging_size) copy_size = ctx->staging_size;
     VkBufferCopy copy_region = { .srcOffset = 0, .dstOffset = 0, .size = copy_size };
     vkCmdCopyBuffer(cmd_buf, ctx->entropy_buffer, ctx->staging_buffers[ctx->current_buf], 1, &copy_region);
+
+    /* Update GPU reference frame with current picture for subsequent P-frames */
+    if (render_target.y_plane && ctx->recon_image.y_plane) {
+        VkImageCopy copy_region_y = {
+            .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+            .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+            .extent = { (uint32_t)width, (uint32_t)height, 1 }
+        };
+        vkCmdCopyImage(cmd_buf, render_target.y_plane, VK_IMAGE_LAYOUT_GENERAL,
+                       ctx->recon_image.y_plane, VK_IMAGE_LAYOUT_GENERAL, 1, &copy_region_y);
+        ctx->has_recon_frame = true;
+    }
 
     return 0;
 }

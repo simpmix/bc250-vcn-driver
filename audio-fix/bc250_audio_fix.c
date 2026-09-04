@@ -45,7 +45,7 @@ static int audio_status_show(struct seq_file *m, void *v)
     seq_printf(m, "=======================\n");
     if (bc250_dev) {
         seq_printf(m, "Device: %s\n", pci_name(bc250_dev));
-        seq_printf(m, "State: Patched\n");
+        seq_printf(m, "State: Experimental Scaffold (MMIO register mapping pending hardware verification)\n");
         seq_printf(m, "Sample Rate: %d Hz\n", sample_rate);
         seq_printf(m, "Channels: %d\n", channels);
     } else {

@@ -42,13 +42,14 @@ int main(void) {
     int num_entrypoints = 0;
     status = ctx.vtable->vaQueryConfigEntrypoints(&ctx, VAProfileH264Main, NULL, &num_entrypoints);
     assert(status == VA_STATUS_SUCCESS);
-    assert(num_entrypoints >= 2);
+    assert(num_entrypoints >= 1);
 
     VAEntrypoint entrypoints[MAX_ENTRYPOINTS];
     status = ctx.vtable->vaQueryConfigEntrypoints(&ctx, VAProfileH264Main, entrypoints, &num_entrypoints);
     assert(status == VA_STATUS_SUCCESS);
-    assert(num_entrypoints >= 2);
-    printf("[PASS] H.264 Main supports %d entrypoints (Encode + Decode)\n", num_entrypoints);
+    assert(num_entrypoints >= 1);
+    assert(entrypoints[0] == VAEntrypointEncSlice);
+    printf("[PASS] H.264 Main supports %d entrypoint (VAEntrypointEncSlice)\n", num_entrypoints);
 
     /* 3. Create Config */
     VAConfigAttrib attribs[2];
