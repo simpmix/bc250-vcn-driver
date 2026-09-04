@@ -77,10 +77,13 @@ if(TARGET compile_shaders)
     add_dependencies(bc250_drv_video compile_shaders)
 endif()
 
+find_package(Threads REQUIRED)
+
 target_link_libraries(bc250_drv_video
     ${Vulkan_LIBRARIES}
     ${LIBVA_LIBRARIES}
     ${DRM_LIBRARIES}
+    ${CMAKE_THREAD_LIBS_INIT}
     m
 )
 

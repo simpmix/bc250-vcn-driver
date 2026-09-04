@@ -118,9 +118,12 @@ void main() {
                 uint p_idx = local_id * 4 + i;
                 uint px = p_idx % 16;
                 uint py = p_idx / 16;
-                float curr = current_mb[py][px];
-                float ref = search_window[py + 16 + test_mv.y][px + 16 + test_mv.x];
-                local_diff += uint(abs(curr - ref) * 255.0);
+                // 2:1 Checkerboard subsampling cuts ALU and shared memory load by 50%
+                if (((px + py) & 1) == 0) {
+                    float curr = current_mb[py][px];
+                    float ref = search_window[py + 16 + test_mv.y][px + 16 + test_mv.x];
+                    local_diff += uint(abs(curr - ref) * 510.0); // Scaled by 2x
+                }
             }
             thread_sad[local_id] = local_diff;
 
@@ -147,6 +150,9 @@ void main() {
             }
             barrier();
         }
+
+        // Early termination if quality is already high (saves extra iterations)
+        if (best_cost < 768) break;
     }
 
     if (local_id == 0) {

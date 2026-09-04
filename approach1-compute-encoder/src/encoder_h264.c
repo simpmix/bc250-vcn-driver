@@ -132,7 +132,9 @@ static size_t write_slice_header(h264_encoder_t *encoder, bitstream_t *bs,
     int slice_qp_delta = qp - 26 - encoder->pps.pic_init_qp;
     bs_write_se(bs, slice_qp_delta);
 
-    bs_write_ue(bs, 0);  /* disable_deblocking_filter_idc = 0 */
+    const char *fm = getenv("BC250_FAST_MODE");
+    int deblock_idc = (fm && (strcmp(fm, "1") == 0 || strcmp(fm, "true") == 0)) ? 1 : 0;
+    bs_write_ue(bs, deblock_idc);  /* disable_deblocking_filter_idc: 1 = disabled (fast gaming mode) */
     bs_write_se(bs, 0);  /* slice_alpha_c0_offset_div2 = 0 */
     bs_write_se(bs, 0);  /* slice_beta_offset_div2 = 0 */
 

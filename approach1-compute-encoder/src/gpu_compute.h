@@ -93,6 +93,7 @@ typedef struct bc250_gpu_context {
 
     VkBuffer staging_buffers[2];
     VkDeviceMemory staging_memories[2];
+    void *staging_mapped[2];
     VkDeviceSize staging_size;
     
     /* Reconstructed frame for DPB */

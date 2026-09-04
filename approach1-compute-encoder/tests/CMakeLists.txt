@@ -14,7 +14,8 @@ add_executable(test_va_api test_va_api.c
     ../src/decoder_h264.c
 )
 target_include_directories(test_va_api PRIVATE ../src ${Vulkan_INCLUDE_DIRS} ${LIBVA_INCLUDE_DIRS} ${DRM_INCLUDE_DIRS})
-target_link_libraries(test_va_api PRIVATE ${Vulkan_LIBRARIES} ${LIBVA_LIBRARIES} ${DRM_LIBRARIES} m)
+find_package(Threads REQUIRED)
+target_link_libraries(test_va_api PRIVATE ${Vulkan_LIBRARIES} ${LIBVA_LIBRARIES} ${DRM_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} m)
 
 enable_testing()
 add_test(NAME BitstreamTest COMMAND test_bitstream)

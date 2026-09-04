@@ -157,6 +157,10 @@ static int allocate_encoding_buffers(gpu_context_t *ctx, uint32_t width, uint32_
     create_buffer_with_memory(ctx, entropy_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &ctx->staging_buffers[0], &ctx->staging_memories[0]);
     create_buffer_with_memory(ctx, entropy_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &ctx->staging_buffers[1], &ctx->staging_memories[1]);
 
+    /* Persistently map both staging buffers to eliminate per-frame map/unmap syscall overhead */
+    vkMapMemory(ctx->device, ctx->staging_memories[0], 0, entropy_size, 0, &ctx->staging_mapped[0]);
+    vkMapMemory(ctx->device, ctx->staging_memories[1], 0, entropy_size, 0, &ctx->staging_mapped[1]);
+
     /* Update buffer descriptors */
     update_storage_buffer_descriptor(ctx->device, ctx->me_desc_set, 2, ctx->mv_buffer, mv_size);
 
@@ -609,6 +613,10 @@ void bc250_gpu_destroy(bc250_gpu_context_t *ctx) {
     if (ctx->nz_count_buffer) { vkDestroyBuffer(ctx->device, ctx->nz_count_buffer, NULL); vkFreeMemory(ctx->device, ctx->nz_count_memory, NULL); }
     if (ctx->entropy_buffer) { vkDestroyBuffer(ctx->device, ctx->entropy_buffer, NULL); vkFreeMemory(ctx->device, ctx->entropy_memory, NULL); }
     for (int i = 0; i < 2; i++) {
+        if (ctx->staging_mapped[i]) {
+            vkUnmapMemory(ctx->device, ctx->staging_memories[i]);
+            ctx->staging_mapped[i] = NULL;
+        }
         if (ctx->staging_buffers[i]) {
             vkDestroyBuffer(ctx->device, ctx->staging_buffers[i], NULL);
             vkFreeMemory(ctx->device, ctx->staging_memories[i], NULL);
@@ -809,8 +817,11 @@ int gpu_compute_dispatch_encode(gpu_context_t *ctx, gpu_image_t render_target, i
         insert_compute_barrier(cmd_buf);
     }
 
-    /* Stage 5: Deblock */
-    if (ctx->deblock_pipeline) {
+    /* Stage 5: Deblock (Skipped in BC250_FAST_MODE to maximize gaming framerates) */
+    const char *fm = getenv("BC250_FAST_MODE");
+    int fast_mode = (fm && (strcmp(fm, "1") == 0 || strcmp(fm, "true") == 0)) ? 1 : 0;
+
+    if (!fast_mode && ctx->deblock_pipeline) {
         vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, ctx->deblock_pipeline);
         vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, ctx->deblock_layout, 0, 1, &ctx->deblock_desc_set, 0, NULL);
         vkCmdPushConstants(cmd_buf, ctx->deblock_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
@@ -860,13 +871,12 @@ int gpu_compute_get_staging_data(gpu_context_t *ctx, void **data, size_t *size) 
     if (!ctx || !data || !size) return -1;
     int prev_buf = (ctx->current_buf + 1) % 2;
     *size = ctx->staging_size;
-    VK_CHECK(vkMapMemory(ctx->device, ctx->staging_memories[prev_buf], 0, ctx->staging_size, 0, data));
-    return 0;
+    *data = ctx->staging_mapped[prev_buf];
+    return (*data != NULL) ? 0 : -1;
 }
 
 int gpu_compute_release_staging_data(gpu_context_t *ctx) {
-    if (!ctx) return -1;
-    int prev_buf = (ctx->current_buf + 1) % 2;
-    vkUnmapMemory(ctx->device, ctx->staging_memories[prev_buf]);
+    (void)ctx;
+    /* Persistently mapped: zero syscall overhead */
     return 0;
 }
