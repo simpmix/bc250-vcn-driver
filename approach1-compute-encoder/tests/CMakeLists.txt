@@ -16,4 +16,4 @@ target_link_libraries(test_encode PRIVATE bc250_drv_video ${Vulkan_LIBRARIES} ${
 enable_testing()
 add_test(NAME BitstreamTest COMMAND test_bitstream)
 add_test(NAME VaApiDriverTest COMMAND test_va_api)
-add_test(NAME EncodeBitstreamTest COMMAND test_encode)
+add_test(NAME EncodeBitstreamTest COMMAND test_encode WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
