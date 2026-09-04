@@ -27,8 +27,42 @@ make
 sudo insmod bc250_audio_fix.ko sample_rate=48000 channels=2
 ```
 
+## Runtime Monitoring & Tuning
+Once the module is loaded, you can check the live audio status and register states:
+```bash
+cat /proc/bc250_audio_status
+```
+Example output:
+```
+===============================================
+      AMD BC-250 Audio Fix & Status Monitor     
+===============================================
+Graphics Device:  0000:01:00.0 [1002:13fe]
+HDA Audio Device: 0000:01:00.1 [1002:1637]
+HDA MMIO BAR 0:   0xfce80000 (length: 16384 bytes)
+MMIO Mapping:     Mapped Active
+HDA Controller:   CRST=Running, Codec Wake=0x1
+HDA Stream Caps:  4 Out Streams, 4 In Streams
+-----------------------------------------------
+Configured Rate:  48000 Hz
+Channels:         2
+DTO Phase:        96000
+DTO Modulo:       390625
+DTO Effective MCLK: 24576000 Hz
+===============================================
+```
+
+You can also dynamically change the audio sample rate at runtime without unloading the module:
+```bash
+# Switch to 44.1 kHz (CD audio standard)
+echo 44100 | sudo tee /proc/bc250_audio_status
+
+# Switch back to 48 kHz (DVD / video standard)
+echo 48000 | sudo tee /proc/bc250_audio_status
+```
+
 ## Applying Patches
-If you prefer to patch your kernel:
+If you prefer to patch your kernel directly:
 ```bash
 cd /usr/src/linux
 patch -p1 < /path/to/0001-dp-audio-clock-fix.patch
