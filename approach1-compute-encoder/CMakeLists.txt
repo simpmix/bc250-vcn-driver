@@ -73,6 +73,10 @@ set(SOURCES
 )
 
 add_library(bc250_drv_video SHARED ${SOURCES})
+set_target_properties(bc250_drv_video PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "bc250_drv_video"
+)
 if(TARGET compile_shaders)
     add_dependencies(bc250_drv_video compile_shaders)
 endif()

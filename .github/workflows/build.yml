@@ -51,8 +51,21 @@ jobs:
         mkdir -p dist/bc250-driver/shaders
         mkdir -p dist/bc250-driver/approach1-compute-encoder/shaders
         
-        # Copy compiled driver library
-        cp approach1-compute-encoder/build/bc250_drv_video.so dist/bc250-driver/
+        # Copy compiled driver library (supporting both bc250_drv_video.so and libbc250_drv_video.so)
+        if [ -f approach1-compute-encoder/build/bc250_drv_video.so ]; then
+          cp approach1-compute-encoder/build/bc250_drv_video.so dist/bc250-driver/
+        elif [ -f approach1-compute-encoder/build/libbc250_drv_video.so ]; then
+          cp approach1-compute-encoder/build/libbc250_drv_video.so dist/bc250-driver/bc250_drv_video.so
+        else
+          FOUND_SO=$(find approach1-compute-encoder/build -name "*bc250_drv_video*.so" | head -n 1)
+          if [ -n "$FOUND_SO" ]; then
+            cp "$FOUND_SO" dist/bc250-driver/bc250_drv_video.so
+          else
+            echo "ERROR: Could not find bc250_drv_video.so in approach1-compute-encoder/build"
+            ls -la approach1-compute-encoder/build/
+            exit 1
+          fi
+        fi
         
         # Copy compiled SPIR-V shaders & GLSL source shaders
         cp approach1-compute-encoder/build/*.spv dist/bc250-driver/shaders/ 2>/dev/null || true
