@@ -442,7 +442,7 @@ VAStatus bc250_EndPicture(VADriverContextP ctx, VAContextID context) {
         if (c->h264_enc) {
             written = h264_encoder_encode_frame(c->h264_enc, &data->gpu, surf->image, dest, max_payload);
         } else if (c->hevc_enc) {
-            written = hevc_encoder_encode_frame(c->hevc_enc, &data->gpu, surf->image, dest, max_out);
+            written = hevc_encoder_encode_frame(c->hevc_enc, &data->gpu, surf->image, dest, max_payload);
         }
 
         if (written > 0) {
