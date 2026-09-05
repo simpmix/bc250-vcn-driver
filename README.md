@@ -6,6 +6,13 @@
 
 Hardware-accelerated video encoding and DisplayPort/HDMI audio fixes for the **AMD BC-250 ("Cyan Skillfish" / PS5 "Oberon" APU)** on Linux (Bazzite, CachyOS, Fedora, Ubuntu, Arch, ChimeraOS).
 
+> [!NOTE]
+> ### 📢 BC-250 Hardware Testers Wanted!
+> Software emulation, CAVLC bitstream generation, and FFmpeg decode oracles have all been mathematically verified in CI. If you own a physical BC-250 APU board, help us validate live on-metal performance!
+> 1. Download the [v0.2.0 Pre-Built Release](../../releases) or build from source.
+> 2. Run `./tools/bc250_diagnose.sh` on your BC-250 system.
+> 3. Submit your results using our [Hardware & Benchmark Report](../../issues/new?template=hardware_report.md) template!
+
 ---
 
 ## 📖 Why Does This Project Exist?
@@ -159,8 +166,8 @@ The repository includes an automated GitHub Actions workflow [`.github/workflows
 ### For Maintainers (Creating Official Releases):
 To publish a new tagged release:
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 GitHub Actions will automatically build the driver, run the test suite, package the `.tar.gz` bundle, and publish it directly to the **Releases** tab on GitHub!
 
@@ -188,4 +195,4 @@ Common quick fixes:
 * Userspace compute driver, shaders, and tools: **MIT**
 * Audio fix kernel module: **GPL-2.0**
 
-<!-- bc250-vcn-driver v0.1.0 -->
+<!-- bc250-vcn-driver v0.2.0 -->
