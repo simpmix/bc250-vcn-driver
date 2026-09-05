@@ -60,6 +60,9 @@ static struct pci_dev *gpu_dev = NULL;
 static struct pci_dev *hda_dev = NULL;
 static void __iomem *hda_mmio = NULL;
 static resource_size_t hda_bar_len = 0;
+static void __iomem *gpu_mmio = NULL;
+static resource_size_t gpu_bar_len = 0;
+static int gpu_bar_idx = -1;
 
 static u32 current_phase = 0;
 static u32 current_modulo = 0;
@@ -89,6 +92,15 @@ static void bc250_apply_audio_fix(void)
     pr_info("bc250_audio_fix: Target Sample Rate: %d Hz (DTO Phase: %u, Modulo: %u)\n",
             sample_rate, current_phase, current_modulo);
 
+    /* Program DCN DCCG Audio DTO on APU Graphics controller if MMIO is available */
+    if (gpu_mmio && gpu_bar_len >= (DCN_DCCG_AUDIO_DTO_MODULO + 4)) {
+        pr_info("bc250_audio_fix: Programming DCN DCCG Audio DTO (Phase: %u, Modulo: %u)...\n",
+                current_phase, current_modulo);
+        iowrite32(0x01, gpu_mmio + DCN_DCCG_AUDIO_DTO_SOURCE); /* Enable DTO0 */
+        iowrite32(current_phase, gpu_mmio + DCN_DCCG_AUDIO_DTO_PHASE);
+        iowrite32(current_modulo, gpu_mmio + DCN_DCCG_AUDIO_DTO_MODULO);
+    }
+
     if (hda_mmio && hda_bar_len >= 0x10) {
         /* Read HDA Global Capabilities and Status */
         u16 gcap = ioread16(hda_mmio + HDA_REG_GCAP);
@@ -114,6 +126,16 @@ static int audio_status_show(struct seq_file *m, void *v)
 
     if (gpu_dev) {
         seq_printf(m, "Graphics Device:  %s [1002:%04x]\n", pci_name(gpu_dev), gpu_dev->device);
+        if (gpu_mmio && gpu_bar_idx >= 0) {
+            seq_printf(m, "GPU MMIO BAR %d:   0x%llx (length: %llu bytes, Active)\n",
+                       gpu_bar_idx,
+                       (unsigned long long)pci_resource_start(gpu_dev, gpu_bar_idx),
+                       (unsigned long long)gpu_bar_len);
+            seq_printf(m, "DCN DCCG DTO HW:  Programmed (0x%04x: Phase=%u, Modulo=%u)\n",
+                       DCN_DCCG_AUDIO_DTO_PHASE, current_phase, current_modulo);
+        } else {
+            seq_printf(m, "GPU MMIO BAR:     Unmapped (Display DTO calculated in software)\n");
+        }
     } else {
         seq_printf(m, "Graphics Device:  Not Detected\n");
     }
@@ -189,12 +211,32 @@ static const struct proc_ops audio_status_ops = {
 
 static int __init bc250_audio_init(void)
 {
-    pr_info("bc250_audio_fix: Initializing AMD BC-250 Audio Fix Module v0.1.0...\n");
+    pr_info("bc250_audio_fix: Initializing AMD BC-250 Audio Fix Module v0.2.0...\n");
 
-    /* 1. Discover Graphics APU */
+    /* 1. Discover Graphics APU & Map MMIO */
     gpu_dev = pci_get_device(BC250_PCI_VENDOR_ID, BC250_PCI_DEVICE_ID, NULL);
     if (gpu_dev) {
         pr_info("bc250_audio_fix: Detected BC-250 APU at %s\n", pci_name(gpu_dev));
+        if (pci_enable_device(gpu_dev) == 0) {
+            for (int bar = 5; bar >= 0; bar--) {
+                resource_size_t len = pci_resource_len(gpu_dev, bar);
+                if ((pci_resource_flags(gpu_dev, bar) & IORESOURCE_MEM) &&
+                    len >= 0x1000 && len <= 0x10000000) {
+                    gpu_bar_idx = bar;
+                    gpu_bar_len = len;
+                    break;
+                }
+            }
+            if (gpu_bar_idx >= 0) {
+                gpu_mmio = pci_iomap(gpu_dev, gpu_bar_idx, 0);
+                if (gpu_mmio) {
+                    pr_info("bc250_audio_fix: Successfully mapped GPU MMIO BAR %d (%llu bytes)\n",
+                            gpu_bar_idx, (unsigned long long)gpu_bar_len);
+                } else {
+                    pr_warn("bc250_audio_fix: Failed to map GPU MMIO BAR %d\n", gpu_bar_idx);
+                }
+            }
+        }
     } else {
         pr_info("bc250_audio_fix: Notice: BC-250 APU (1002:13fe) not directly detected on bus.\n");
     }
@@ -259,7 +301,13 @@ static void __exit bc250_audio_exit(void)
         hda_dev = NULL;
     }
 
+    if (gpu_mmio && gpu_dev && gpu_bar_idx >= 0) {
+        pci_iounmap(gpu_dev, gpu_mmio);
+        gpu_mmio = NULL;
+    }
+
     if (gpu_dev) {
+        pci_disable_device(gpu_dev);
         pci_dev_put(gpu_dev);
         gpu_dev = NULL;
     }

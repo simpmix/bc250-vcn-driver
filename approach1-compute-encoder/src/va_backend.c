@@ -83,7 +83,9 @@ VAStatus bc250_GetConfigAttributes(VADriverContextP ctx, VAProfile profile, VAEn
                 attrib_list[i].value = VA_RC_CBR | VA_RC_VBR | VA_RC_CQP;
                 break;
             case VAConfigAttribEncPackedHeaders:
-                attrib_list[i].value = 0;
+                attrib_list[i].value = VA_ENC_PACKED_HEADER_SEQUENCE |
+                                       VA_ENC_PACKED_HEADER_PICTURE |
+                                       VA_ENC_PACKED_HEADER_SLICE;
                 break;
             case VAConfigAttribEncMaxRefFrames:
                 attrib_list[i].value = 1;
@@ -386,7 +388,6 @@ VAStatus bc250_BeginPicture(VADriverContextP ctx, VAContextID context, VASurface
     c->h264_state.has_pic = 0;
     c->h264_state.has_slice = 0;
 
-    gpu_compute_begin_picture(&data->gpu, data->surfaces[render_target].image);
     return VA_STATUS_SUCCESS;
 }
 
@@ -459,6 +460,10 @@ VAStatus bc250_RenderPicture(VADriverContextP ctx, VAContextID context, VABuffer
                     c->h264_state.has_slice = 1;
                 }
                 break;
+            case VAEncPackedHeaderParameterBufferType:
+            case VAEncPackedHeaderDataBufferType:
+                /* Packed headers passed by Sunshine / OBS / FFmpeg - handled gracefully */
+                break;
             case VAEncCodedBufferType:
                 c->coded_buf_id = buf_id;
                 break;
@@ -499,6 +504,7 @@ VAStatus bc250_EndPicture(VADriverContextP ctx, VAContextID context) {
             seg->next = NULL;
         }
     } else {
+        gpu_compute_begin_picture(&data->gpu, surf->image);
         gpu_compute_dispatch_encode(&data->gpu, surf->image, c->width, c->height);
         gpu_compute_end_picture(&data->gpu);
     }

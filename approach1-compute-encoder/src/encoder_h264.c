@@ -306,7 +306,15 @@ int h264_encoder_encode_frame(h264_encoder_t *encoder,
                     cavlc_write_p_skip_run(&bs, current_skip_run);
                     current_skip_run = 0;
                 }
-                cavlc_write_mb_p16x16_header(&bs, 0, 0, 0, 0);
+                int mvd_x = 0, mvd_y = 0;
+                if (gpu_staging && staging_size >= (mb + 1) * 24 * sizeof(uint32_t)) {
+                    uint32_t *mb_blocks = ((uint32_t *)gpu_staging) + mb * 24;
+                    int top_act = (int)(mb_blocks[0] & 0xFF) - (int)(mb_blocks[1] & 0xFF);
+                    int left_act = (int)(mb_blocks[0] & 0xFF) - (int)(mb_blocks[4] & 0xFF);
+                    if (abs(top_act) > 4) mvd_x = (top_act > 0 ? 1 : -1) * 4;
+                    if (abs(left_act) > 4) mvd_y = (left_act > 0 ? 1 : -1) * 4;
+                }
+                cavlc_write_mb_p16x16_header(&bs, mvd_x, mvd_y, 0, 0);
             }
         }
         if (current_skip_run > 0) {
@@ -480,7 +488,43 @@ int h264_encoder_encode_raw(h264_encoder_t *encoder,
                         cavlc_write_p_skip_run(&bs, current_skip_run);
                         current_skip_run = 0;
                     }
-                    cavlc_write_mb_p16x16_header(&bs, 0, 0, 0, 0);
+                    int best_dx = 0, best_dy = 0;
+                    uint32_t best_sad = sad;
+                    if (encoder->has_prev_frame && encoder->prev_y_frame) {
+                        static const int cand_mvs[8][2] = {
+                            {-1, 0}, {1, 0}, {0, -1}, {0, 1},
+                            {-2, 0}, {2, 0}, {0, -2}, {0, 2}
+                        };
+                        for (int d = 0; d < 8; d++) {
+                            int dx = cand_mvs[d][0];
+                            int dy = cand_mvs[d][1];
+                            uint32_t cand_sad = 0;
+                            for (int r = 0; r < 16; r += 2) {
+                                int py = (int)(mby * 16 + r);
+                                int ref_py = py + dy;
+                                if (py >= (int)encoder->height || ref_py < 0 || ref_py >= (int)encoder->height) {
+                                    cand_sad += 255 * 8;
+                                    continue;
+                                }
+                                for (int c = 0; c < 16; c += 2) {
+                                    int px = (int)(mbx * 16 + c);
+                                    int ref_px = px + dx;
+                                    if (px >= (int)encoder->width || ref_px < 0 || ref_px >= (int)encoder->width) {
+                                        cand_sad += 255;
+                                        continue;
+                                    }
+                                    cand_sad += abs((int)y_plane[py * y_pitch + px] -
+                                                    (int)encoder->prev_y_frame[ref_py * encoder->width + ref_px]) * 4;
+                                }
+                            }
+                            if (cand_sad < best_sad) {
+                                best_sad = cand_sad;
+                                best_dx = dx;
+                                best_dy = dy;
+                            }
+                        }
+                    }
+                    cavlc_write_mb_p16x16_header(&bs, best_dx * 4, best_dy * 4, 0, 0);
                 }
             }
         }
