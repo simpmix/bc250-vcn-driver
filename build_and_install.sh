@@ -36,75 +36,105 @@ else
     echo -e "  Proceeding with build anyway (Vulkan compute driver is compatible with other AMD GPUs for testing)."
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PREBUILT_SO="$SCRIPT_DIR/bc250_drv_video.so"
+IS_PREBUILT=0
+
+if [ -f "$PREBUILT_SO" ]; then
+    IS_PREBUILT=1
+    echo -e "${GREEN}✓ Detected pre-built release package (no compilation required).${NC}"
+fi
+
 # Check dependencies
 echo -e "\n${BLUE}[2/5] Checking dependencies...${NC}"
-MISSING_PKGS=()
-
-check_cmd() {
-    if ! command -v "$1" &> /dev/null; then
-        MISSING_PKGS+=("$2")
-    fi
-}
-
-check_cmd cmake "cmake"
-check_cmd gcc "gcc / build-essential"
-check_cmd pkg-config "pkg-config"
-
-if ! command -v glslangValidator &> /dev/null && ! command -v glslc &> /dev/null; then
-    MISSING_PKGS+=("glslang-tools (or shaderc)")
-fi
-
-if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
-    echo -e "${YELLOW}Missing packages detected:${NC}"
-    for pkg in "${MISSING_PKGS[@]}"; do
-        echo -e "    * $pkg"
-    done
-    
-    echo -e "\n${BOLD}Attempting to install missing build dependencies...${NC}"
-    if command -v apt-get &> /dev/null; then
-        $SUDO apt-get update
-        $SUDO apt-get install -y build-essential cmake pkg-config libva-dev libdrm-dev libvulkan-dev glslang-tools vainfo
-    elif command -v dnf &> /dev/null; then
-        $SUDO dnf install -y gcc gcc-c++ cmake pkgconf libva-devel libdrm-devel vulkan-loader-devel glslang libva-utils
-    elif command -v pacman &> /dev/null; then
-        $SUDO pacman -S --needed --noconfirm base-devel cmake pkgconf libva libdrm vulkan-devel glslang libva-utils
-    elif command -v zypper &> /dev/null; then
-        $SUDO zypper install -y gcc gcc-c++ cmake pkg-config libva-devel libdrm-devel vulkan-devel glslang libva-utils
-    else
-        echo -e "${RED}Could not auto-install dependencies. Please install: cmake, gcc, libva-dev, libdrm-dev, vulkan-dev, glslang-tools${NC}"
-    fi
+if [ "$IS_PREBUILT" -eq 1 ]; then
+    echo -e "${GREEN}✓ Using pre-compiled driver and shaders. Skipping build tools check.${NC}"
 else
-    echo -e "${GREEN}✓ All core build tools are available.${NC}"
+    MISSING_PKGS=()
+
+    check_cmd() {
+        if ! command -v "$1" &> /dev/null; then
+            MISSING_PKGS+=("$2")
+        fi
+    }
+
+    check_cmd cmake "cmake"
+    check_cmd gcc "gcc / build-essential"
+    check_cmd pkg-config "pkg-config"
+
+    if ! command -v glslangValidator &> /dev/null && ! command -v glslc &> /dev/null; then
+        MISSING_PKGS+=("glslang-tools (or shaderc)")
+    fi
+
+    if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
+        echo -e "${YELLOW}Missing packages detected:${NC}"
+        for pkg in "${MISSING_PKGS[@]}"; do
+            echo -e "    * $pkg"
+        done
+        
+        echo -e "\n${BOLD}Attempting to install missing build dependencies...${NC}"
+        if command -v apt-get &> /dev/null; then
+            $SUDO apt-get update
+            $SUDO apt-get install -y build-essential cmake pkg-config libva-dev libdrm-dev libvulkan-dev glslang-tools vainfo
+        elif command -v dnf &> /dev/null; then
+            $SUDO dnf install -y gcc gcc-c++ cmake pkgconf libva-devel libdrm-devel vulkan-loader-devel glslang libva-utils
+        elif command -v pacman &> /dev/null; then
+            $SUDO pacman -S --needed --noconfirm base-devel cmake pkgconf libva libdrm vulkan-devel glslang libva-utils
+        elif command -v zypper &> /dev/null; then
+            $SUDO zypper install -y gcc gcc-c++ cmake pkg-config libva-devel libdrm-devel vulkan-devel glslang libva-utils
+        else
+            echo -e "${RED}Could not auto-install dependencies. Please install: cmake, gcc, libva-dev, libdrm-dev, vulkan-dev, glslang-tools${NC}"
+        fi
+    else
+        echo -e "${GREEN}✓ All core build tools are available.${NC}"
+    fi
 fi
 
-# Build Compute Encoder VA-API driver
-echo -e "\n${BLUE}[3/5] Building Compute Encoder VA-API driver...${NC}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="$SCRIPT_DIR/approach1-compute-encoder/build"
-mkdir -p "$BUILD_DIR"
-cd "$BUILD_DIR"
-
-cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
-make -j"$(nproc)"
-
-# Run tests
-echo -e "\n${BLUE}[4/5] Running driver unit and integration tests...${NC}"
-ctest --output-on-failure || echo -e "${YELLOW}Note: Some Vulkan display tests may skip if running in headless terminal.${NC}"
-
-# Install driver
-echo -e "\n${BLUE}[5/5] Installing driver and compute shaders...${NC}"
-$SUDO make install
-
-# Also symlink to all common DRI paths to guarantee VA-API loader discovers it
+# Build or Stage Compute Encoder VA-API driver
+echo -e "\n${BLUE}[3/5] Setting up Compute Encoder VA-API driver...${NC}"
 DRI_DIRS=("/usr/lib/x86_64-linux-gnu/dri" "/usr/lib64/dri" "/usr/lib/dri")
-for d in "${DRI_DIRS[@]}"; do
-    if [ -d "$d" ]; then
-        echo -e "  -> Linking driver into $d/bc250_drv_video.so"
-        $SUDO cp -f "$BUILD_DIR/bc250_drv_video.so" "$d/bc250_drv_video.so" 2>/dev/null || true
+SHADER_DESTS=("/usr/share/bc250/shaders" "/usr/local/share/bc250/shaders")
+
+if [ "$IS_PREBUILT" -eq 1 ]; then
+    echo -e "${GREEN}✓ Staging pre-built driver binary...${NC}"
+    DRIVER_BIN="$PREBUILT_SO"
+else
+    BUILD_DIR="$SCRIPT_DIR/approach1-compute-encoder/build"
+    mkdir -p "$BUILD_DIR"
+    cd "$BUILD_DIR"
+
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+    make -j"$(nproc)"
+    DRIVER_BIN="$BUILD_DIR/bc250_drv_video.so"
+
+    # Run tests
+    echo -e "\n${BLUE}[4/5] Running driver unit and integration tests...${NC}"
+    ctest --output-on-failure || echo -e "${YELLOW}Note: Some Vulkan display tests may skip if running in headless terminal.${NC}"
+    
+    $SUDO make install
+    cd "$SCRIPT_DIR"
+fi
+
+# Install driver and shaders
+echo -e "\n${BLUE}[5/5] Installing driver and compute shaders...${NC}"
+for dest in "${SHADER_DESTS[@]}"; do
+    $SUDO mkdir -p "$dest"
+    if [ -d "$SCRIPT_DIR/shaders" ]; then
+        $SUDO cp -f "$SCRIPT_DIR"/shaders/* "$dest/" 2>/dev/null || true
+    elif [ -d "$SCRIPT_DIR/approach1-compute-encoder/shaders" ]; then
+        $SUDO cp -f "$SCRIPT_DIR"/approach1-compute-encoder/shaders/* "$dest/" 2>/dev/null || true
+    fi
+    if [ -d "$SCRIPT_DIR/approach1-compute-encoder/build" ]; then
+        $SUDO cp -f "$SCRIPT_DIR"/approach1-compute-encoder/build/*.spv "$dest/" 2>/dev/null || true
     fi
 done
 
-cd "$SCRIPT_DIR"
+for d in "${DRI_DIRS[@]}"; do
+    if [ -d "$d" ]; then
+        echo -e "  -> Installing driver into $d/bc250_drv_video.so"
+        $SUDO cp -f "$DRIVER_BIN" "$d/bc250_drv_video.so" 2>/dev/null || true
+    fi
+done
 
 # Configure system-wide environment for boot persistence
 if [ -d "/etc/environment.d" ]; then

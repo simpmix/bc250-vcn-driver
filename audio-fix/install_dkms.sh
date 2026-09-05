@@ -4,10 +4,10 @@
 # install_dkms.sh - Installs bc250_audio_fix into DKMS for kernel auto-rebuilds
 #
 
-set -e
-
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_NAME="bc250-audio-fix"
-PKG_VER="0.1.0"
+PKG_VER=$(grep -m1 '^PACKAGE_VERSION=' "$SCRIPT_DIR/dkms.conf" 2>/dev/null | cut -d'"' -f2)
+PKG_VER="${PKG_VER:-0.2.0}"
 SRC_DIR="/usr/src/${PKG_NAME}-${PKG_VER}"
 
 if [ "$EUID" -ne 0 ]; then
